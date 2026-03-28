@@ -748,6 +748,7 @@ void UpdateRadarLcd()
         targetInfo.RenderColour = Color.Red;
         targetInfo.Location = activeTargetPacket.TargetPosition;
         targetInfo.Velocity = activeTargetPacket.TargetVelocity * 30;
+        targetInfo.DrawVelocityVector = true;
         runtimeAgs.ToDisplay.Add(targetInfo);
     }
 
@@ -1970,6 +1971,7 @@ public class VetileRadarDisplay
         public Vector3D Velocity;
         public Color RenderColour;
         public float MarkerSize;
+        public bool DrawVelocityVector;
     }
 
     public struct RuntimeAgs
@@ -2026,7 +2028,8 @@ public class VetileRadarDisplay
                 ProjectToPlane(viewInv, item.Location, item.Velocity, out squareLocation, out squarePointPos);
                 float markerSize = item.MarkerSize > 0f ? item.MarkerSize : 0.025f;
                 renderableSprites.Add(DrawRectangle_FromCntr(squareLocation, markerSize, markerSize, item.RenderColour, true));
-                renderableSprites.Add(DrawLine(squareLocation, squarePointPos, 0.005f, item.RenderColour));
+                if (item.DrawVelocityVector)
+                    renderableSprites.Add(DrawLine(squareLocation, squarePointPos, 0.005f, item.RenderColour));
             }
 
             if (args.DrawReferenceMarker)
