@@ -148,6 +148,9 @@ TargetSourceMode targetSourceMode = TargetSourceMode.Local;
 Dictionary<string, RemoteSourceState> remoteSources = new Dictionary<string, RemoteSourceState>();
 List<string> remoteSourceOrder = new List<string>();
 Dictionary<string, RdavMissileFeed> rdavMissileFeeds = new Dictionary<string, RdavMissileFeed>();
+Dictionary<string, string> cachedTagRuntimeDisplay = new Dictionary<string, string>();
+double lastTagRuntimeRefreshAt = -9999;
+const double TAG_RUNTIME_REFRESH_SECONDS = 2.0;
 int selectedRemoteIndex;
 TargetPacket activeTargetPacket;
 double activeTargetDistanceMeters = -1;
@@ -567,7 +570,7 @@ void UpdateSummaryLcd()
         var ch = channels[TAGS[i]];
         int remaining = ch.Projector != null ? ch.Projector.RemainingBlocks + ch.Projector.RemainingArmorBlocks : -1;
         string state = GetDisplayState(ch);
-        string scriptRuntime = GetProgrammableRuntimeDisplay(ch.FireTargetPb);
+        string scriptRuntime = GetCachedTagRuntimeDisplay(ch.Tag);
 
         text.AppendLine(ch.Tag);
         text.AppendLine($"state: {state} | rt: {scriptRuntime}");
@@ -576,6 +579,28 @@ void UpdateSummaryLcd()
     }
 
     summaryLcd.WriteText(text.ToString(), false);
+}
+
+string GetCachedTagRuntimeDisplay(string tag)
+{
+    if ((elapsedSeconds - lastTagRuntimeRefreshAt) > TAG_RUNTIME_REFRESH_SECONDS)
+        RefreshTagRuntimeCache();
+
+    string value;
+    if (cachedTagRuntimeDisplay.TryGetValue(tag, out value))
+        return value;
+    return "-";
+}
+
+void RefreshTagRuntimeCache()
+{
+    lastTagRuntimeRefreshAt = elapsedSeconds;
+    foreach (var kv in channels)
+    {
+        string tag = kv.Key;
+        var ch = kv.Value;
+        cachedTagRuntimeDisplay[tag] = GetProgrammableRuntimeDisplay(ch.FireTargetPb);
+    }
 }
 
 string GetProgrammableRuntimeDisplay(IMyProgrammableBlock pb)
@@ -599,11 +624,19 @@ string GetProgrammableRuntimeDisplay(IMyProgrammableBlock pb)
             continue;
 
         string numeric = "";
+        bool started = false;
         for (int j = 0; j < line.Length; j++)
         {
             char c = line[j];
             if ((c >= '0' && c <= '9') || c == '.' || c == ',')
+            {
+                started = true;
                 numeric += c == ',' ? "." : c.ToString();
+            }
+            else if (started)
+            {
+                break;
+            }
         }
 
         double parsedMs;
