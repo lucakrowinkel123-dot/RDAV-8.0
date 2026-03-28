@@ -1074,9 +1074,17 @@ bool TryGetLocalPacket(out TargetPacket packet)
 bool TryGetRemotePacket(out TargetPacket packet)
 {
     packet = BuildNoTargetPacket();
+    if (remoteSourceOrder.Count == 0)
+        return false;
+
+    // Keep operator selection stable: do not silently jump to another remote source
+    // if the selected source goes stale or temporarily drops target lock.
     if (TryGetSelectedRemotePacket(out packet))
         return true;
-    return TryGetBestAvailableRemotePacket(out packet);
+
+    packet = BuildNoTargetPacket();
+    packet.SourceName = GetSelectedRemoteNameOrDefault();
+    return true;
 }
 
 bool TryGetSelectedRemotePacket(out TargetPacket packet)
