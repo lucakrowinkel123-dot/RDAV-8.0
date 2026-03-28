@@ -666,7 +666,26 @@
               {
                   Vector2 sourcelocation, sourcepointpos;
                   ProjectToPlane(viewInv, args.ReferenceMarkerLocation, Vector3D.Zero, out sourcelocation, out sourcepointpos);
-                  renderableSprites.Add(DrawCircle(sourcelocation, 0.012f, Color.LimeGreen, true));
+                  Vector2 radarCenter = new Vector2(0.5f, 0.5f) + new Vector2(0, -16) / 512.0f;
+                  const float radarRadius = 200f / 512f;
+                  Vector2 sourceOffset = sourcelocation - radarCenter;
+                  float sourceDistanceSquared = sourceOffset.LengthSquared();
+                  float radarRadiusSquared = radarRadius * radarRadius;
+
+                  if (sourceDistanceSquared > radarRadiusSquared)
+                  {
+                      if (sourceDistanceSquared > 0.000001f)
+                      {
+                          Vector2 sourceDirection = Vector2.Normalize(sourceOffset);
+                          Vector2 edgePoint = radarCenter + sourceDirection * (radarRadius - 0.01f);
+                          renderableSprites.Add(DrawLine(edgePoint, radarCenter, 0.0035f, Color.LimeGreen));
+                          renderableSprites.Add(DrawCircle(edgePoint, 0.009f, Color.LimeGreen, true));
+                      }
+                  }
+                  else
+                  {
+                      renderableSprites.Add(DrawCircle(sourcelocation, 0.012f, Color.LimeGreen, true));
+                  }
               }
 
               //Renders Information GUI
