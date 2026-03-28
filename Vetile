@@ -582,6 +582,8 @@ void UpdateRadarLcd()
     runtimeAgs.ReferenceUpwards = up;
     runtimeAgs.ReferenceMarkerLocation = activeTargetPacket.SourcePosition;
     runtimeAgs.DrawReferenceMarker = true;
+    runtimeAgs.ReferenceMarkerColor = new Color(245, 245, 220); // beige
+    runtimeAgs.ReferenceMarkerLabel = string.IsNullOrWhiteSpace(activeTargetPacket.SourceName) ? "SCOUT" : activeTargetPacket.SourceName;
     runtimeAgs.TargetLock = activeTargetPacket.HasTarget;
     runtimeAgs.Targetmode = "VTL";
     runtimeAgs.Targetinfoline1 = "SRC: " + activeTargetPacket.SourceName;
@@ -1586,6 +1588,7 @@ public class VetileRadarDisplay
     const string SquareHollow = "SquareHollow";
     const string CircleHollow = "CircleHollow";
     const string Circle = "Circle";
+    const float RadarRotationDegrees = 90f; //clockwise correction for centralized radar alignment
 
     public VetileRadarDisplay(IMyTextSurface textSurface)
     {
@@ -1705,11 +1708,26 @@ public class VetileRadarDisplay
         const float screenUnitsPerMeter = pixelsPerMeter / 512.0f;
         Vector2 radarCenter = new Vector2(0.5f, 0.5f) + new Vector2(0, -16) / 512.0f;
         Vector3D localPos = Vector3D.Transform(location, worldToLocal);
-        locationScreenspace = radarCenter + new Vector2((float)localPos.X, (float)localPos.Z) * screenUnitsPerMeter;
+        Vector2 localFlat = new Vector2((float)localPos.X, (float)localPos.Z);
+        localFlat = RotateVectorDegrees(localFlat, RadarRotationDegrees);
+        locationScreenspace = radarCenter + localFlat * screenUnitsPerMeter;
 
         Vector3D localVelocity = Vector3D.TransformNormal(velocity, worldToLocal);
         if (localVelocity.LengthSquared() > 0) localVelocity = Vector3D.Normalize(localVelocity);
-        velocityIndicator = locationScreenspace + new Vector2((float)localVelocity.X, (float)localVelocity.Z) * 0.05f;
+        Vector2 velFlat = new Vector2((float)localVelocity.X, (float)localVelocity.Z);
+        velFlat = RotateVectorDegrees(velFlat, RadarRotationDegrees);
+        velocityIndicator = locationScreenspace + velFlat * 0.05f;
+    }
+
+    Vector2 RotateVectorDegrees(Vector2 value, float degrees)
+    {
+        float radians = MathHelper.ToRadians(degrees);
+        float cos = (float)Math.Cos(radians);
+        float sin = (float)Math.Sin(radians);
+        return new Vector2(
+            value.X * cos + value.Y * sin,
+            -value.X * sin + value.Y * cos
+        );
     }
 
     float sweepAngle = 0f;
@@ -1730,6 +1748,8 @@ public class VetileRadarDisplay
         public Vector3D ReferenceUpwards;
         public Vector3D ReferenceMarkerLocation;
         public bool DrawReferenceMarker;
+        public Color ReferenceMarkerColor;
+        public string ReferenceMarkerLabel;
         public List<TargetInfo> ToDisplay;
         public string Targetmode;
         public string Targetinfoline1;
@@ -1767,6 +1787,9 @@ public class VetileRadarDisplay
                 const float radarRadius = 200f / 512f;
                 Vector2 sourceOffset = sourceLocation - radarCenter;
                 float sourceDistanceSquared = sourceOffset.LengthSquared();
+                Color markerColor = args.ReferenceMarkerColor;
+                if (markerColor.A == 0) markerColor = Color.LimeGreen;
+                string markerLabel = string.IsNullOrWhiteSpace(args.ReferenceMarkerLabel) ? "SCOUT" : args.ReferenceMarkerLabel;
 
                 if (sourceDistanceSquared > radarRadius * radarRadius)
                 {
@@ -1774,13 +1797,15 @@ public class VetileRadarDisplay
                     {
                         Vector2 sourceDirection = Vector2.Normalize(sourceOffset);
                         Vector2 edgePoint = radarCenter + sourceDirection * (radarRadius - 0.01f);
-                        renderableSprites.Add(DrawLine(edgePoint, radarCenter, 0.0035f, Color.LimeGreen));
-                        renderableSprites.Add(DrawCircle(edgePoint, 0.009f, Color.LimeGreen, true));
+                        renderableSprites.Add(DrawLine(edgePoint, radarCenter, 0.0035f, markerColor));
+                        renderableSprites.Add(DrawCircle(edgePoint, 0.009f, markerColor, true));
+                        renderableSprites.Add(DrawText(markerLabel, edgePoint + new Vector2(0.014f, -0.012f), markerColor, 0.45f, TextAlignment.LEFT));
                     }
                 }
                 else
                 {
-                    renderableSprites.Add(DrawCircle(sourceLocation, 0.012f, Color.LimeGreen, true));
+                    renderableSprites.Add(DrawCircle(sourceLocation, 0.012f, markerColor, true));
+                    renderableSprites.Add(DrawText(markerLabel, sourceLocation + new Vector2(0.014f, -0.012f), markerColor, 0.45f, TextAlignment.LEFT));
                 }
             }
 
