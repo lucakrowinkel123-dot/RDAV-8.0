@@ -550,10 +550,7 @@ void UpdateSummaryLcd()
     var text = new StringBuilder();
     text.AppendLine($"Target Priority: {globalTargetMode}");
     text.AppendLine($"Target System: {globalTargetSubsystemMode}");
-    text.AppendLine($"Source Mode: {targetSourceMode}");
     text.AppendLine($"Target ID: {(activeTargetPacket.HasTarget ? activeTargetPacket.TargetId.ToString() : RDAV_STATUS_NONE)}");
-    text.AppendLine($"Source: {activeTargetPacket.SourceName}");
-    text.AppendLine($"Distance: {(activeTargetDistanceMeters >= 0 ? activeTargetDistanceMeters.ToString("0") + "m" : "-")}");
     text.AppendLine();
 
     for (int i = 0; i < TAGS.Length; i++)
@@ -593,6 +590,7 @@ void UpdateRadarLcd()
     runtimeAgs.Targetmode = "VTL";
     runtimeAgs.Targetinfoline1 = "SRC: " + activeTargetPacket.SourceName;
     runtimeAgs.Targetinfoline2 = activeTargetPacket.HasTarget ? ("ID: " + activeTargetPacket.TargetId) : RDAV_STATUS_NONE;
+    runtimeAgs.DistanceLabel = activeTargetDistanceMeters >= 0 ? activeTargetDistanceMeters.ToString("0") + "m" : "-";
     runtimeAgs.MissileRemainingCount = CountActiveMissileTelemetry();
     runtimeAgs.ToDisplay = new List<VetileRadarDisplay.TargetInfo>();
     runtimeAgs.Markers = new List<VetileRadarDisplay.MarkerInfo>();
@@ -1834,6 +1832,7 @@ public class VetileRadarDisplay
         public string Targetmode;
         public string Targetinfoline1;
         public string Targetinfoline2;
+        public string DistanceLabel;
         public int MissileRemainingCount;
         public bool TargetLock;
         public bool BoostMode;
@@ -1873,7 +1872,6 @@ public class VetileRadarDisplay
                 ProjectToPlane(viewInv, item.Location, item.Velocity, out squareLocation, out squarePointPos);
                 renderableSprites.Add(DrawRectangle_FromCntr(squareLocation, 0.025f, 0.025f, item.RenderColour, true));
                 renderableSprites.Add(DrawLine(squareLocation, squarePointPos, 0.005f, item.RenderColour));
-                renderableSprites.Add(DrawText(item.Velocity.Length().ToString("F1"), squareLocation + new Vector2(0.02f, -0.04f), item.RenderColour, 0.5f, TextAlignment.LEFT));
             }
 
             if (args.DrawReferenceMarker)
@@ -1925,6 +1923,8 @@ public class VetileRadarDisplay
             }
 
             renderableSprites.AddRange(DrawDynamicUI(new Vector2(0.5f, 0.5f), args.MissileRemainingCount.ToString("D2"), args.Targetmode, args.Targetinfoline1, args.Targetinfoline2));
+            if (!string.IsNullOrWhiteSpace(args.DistanceLabel))
+                renderableSprites.Add(DrawText(args.DistanceLabel, new Vector2(0.5f, 0.955f), Color.White, 0.75f, TextAlignment.CENTER));
             if (args.TargetLock) renderableSprites.AddRange(DrawTargetLockUI(new Vector2(0.5f, 0.5f)));
 
             for (int i = 0; i < renderableSprites.Count; i++)
