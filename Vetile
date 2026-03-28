@@ -748,7 +748,6 @@ void UpdateRadarLcd()
         targetInfo.RenderColour = Color.Red;
         targetInfo.Location = activeTargetPacket.TargetPosition;
         targetInfo.Velocity = activeTargetPacket.TargetVelocity * 30;
-        targetInfo.DrawVelocityVector = true;
         runtimeAgs.ToDisplay.Add(targetInfo);
     }
 
@@ -803,9 +802,7 @@ void AddClusteredMissilesToDisplay(List<VetileRadarDisplay.TargetInfo> output, L
         missileInfo.RenderColour = Color.RoyalBlue;
         missileInfo.Location = posSum / count;
         missileInfo.Velocity = velSum / count;
-        missileInfo.UseBubbleMarker = true;
-        missileInfo.BubbleRadius = (float)Math.Min(0.04, 0.012 + Math.Sqrt(count) * 0.0055);
-        missileInfo.DrawVelocityVector = false;
+        missileInfo.MarkerSize = 0.0125f; // half of default 0.025
         output.Add(missileInfo);
     }
 }
@@ -1972,9 +1969,7 @@ public class VetileRadarDisplay
         public Vector3D Location;
         public Vector3D Velocity;
         public Color RenderColour;
-        public bool UseBubbleMarker;
-        public float BubbleRadius;
-        public bool DrawVelocityVector;
+        public float MarkerSize;
     }
 
     public struct RuntimeAgs
@@ -2029,18 +2024,9 @@ public class VetileRadarDisplay
             {
                 Vector2 squareLocation, squarePointPos;
                 ProjectToPlane(viewInv, item.Location, item.Velocity, out squareLocation, out squarePointPos);
-                if (item.UseBubbleMarker)
-                {
-                    float radius = item.BubbleRadius > 0f ? item.BubbleRadius : 0.012f;
-                    renderableSprites.Add(DrawCircle(squareLocation, radius, item.RenderColour, true));
-                }
-                else
-                {
-                    renderableSprites.Add(DrawRectangle_FromCntr(squareLocation, 0.025f, 0.025f, item.RenderColour, true));
-                }
-
-                if (item.DrawVelocityVector)
-                    renderableSprites.Add(DrawLine(squareLocation, squarePointPos, 0.005f, item.RenderColour));
+                float markerSize = item.MarkerSize > 0f ? item.MarkerSize : 0.025f;
+                renderableSprites.Add(DrawRectangle_FromCntr(squareLocation, markerSize, markerSize, item.RenderColour, true));
+                renderableSprites.Add(DrawLine(squareLocation, squarePointPos, 0.005f, item.RenderColour));
             }
 
             if (args.DrawReferenceMarker)
