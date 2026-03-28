@@ -582,8 +582,9 @@ void UpdateRadarLcd()
     runtimeAgs.ReferenceUpwards = up;
     runtimeAgs.ReferenceMarkerLocation = activeTargetPacket.SourcePosition;
     runtimeAgs.DrawReferenceMarker = true;
-    runtimeAgs.ReferenceMarkerColor = new Color(245, 245, 220); // beige
-    runtimeAgs.ReferenceMarkerLabel = string.IsNullOrWhiteSpace(activeTargetPacket.SourceName) ? "SCOUT" : activeTargetPacket.SourceName;
+    bool sourceIsLocal = targetSourceMode == TargetSourceMode.Local;
+    runtimeAgs.ReferenceMarkerColor = sourceIsLocal ? new Color(0, 0, 0, 0) : new Color(245, 245, 220); // hide local source marker, beige for remotes
+    runtimeAgs.ReferenceMarkerLabel = sourceIsLocal ? "" : (string.IsNullOrWhiteSpace(activeTargetPacket.SourceName) ? "SCOUT" : activeTargetPacket.SourceName);
     runtimeAgs.TargetLock = activeTargetPacket.HasTarget;
     runtimeAgs.Targetmode = "VTL";
     runtimeAgs.Targetinfoline1 = "SRC: " + activeTargetPacket.SourceName;
@@ -1618,7 +1619,7 @@ public class VetileRadarDisplay
     const string SquareHollow = "SquareHollow";
     const string CircleHollow = "CircleHollow";
     const string Circle = "Circle";
-    const float RadarRotationDegrees = 90f; //clockwise correction for centralized radar alignment
+    const float RadarRotationDegrees = 270f; //orientation correction
 
     public VetileRadarDisplay(IMyTextSurface textSurface)
     {
@@ -1822,11 +1823,14 @@ public class VetileRadarDisplay
                 List<MarkerInfo> markers = args.Markers ?? new List<MarkerInfo>();
 
                 // Optional source marker from existing field (kept for backward compatibility).
-                MarkerInfo sourceMarker = new MarkerInfo();
-                sourceMarker.Location = args.ReferenceMarkerLocation;
-                sourceMarker.Color = args.ReferenceMarkerColor.A == 0 ? Color.LimeGreen : args.ReferenceMarkerColor;
-                sourceMarker.Label = string.IsNullOrWhiteSpace(args.ReferenceMarkerLabel) ? "" : args.ReferenceMarkerLabel;
-                markers.Add(sourceMarker);
+                if (args.ReferenceMarkerColor.A > 0)
+                {
+                    MarkerInfo sourceMarker = new MarkerInfo();
+                    sourceMarker.Location = args.ReferenceMarkerLocation;
+                    sourceMarker.Color = args.ReferenceMarkerColor;
+                    sourceMarker.Label = string.IsNullOrWhiteSpace(args.ReferenceMarkerLabel) ? "" : args.ReferenceMarkerLabel;
+                    markers.Add(sourceMarker);
+                }
 
                 Vector2 radarCenter = new Vector2(0.5f, 0.5f) + new Vector2(0, -16) / 512.0f;
                 const float radarRadius = 200f / 512f;
@@ -1837,7 +1841,8 @@ public class VetileRadarDisplay
                     ProjectToPlane(viewInv, markers[i].Location, Vector3D.Zero, out markerLocation, out markerPointPos);
                     Vector2 markerOffset = markerLocation - radarCenter;
                     float markerDistanceSquared = markerOffset.LengthSquared();
-                    Color markerColor = markers[i].Color.A == 0 ? Color.LimeGreen : markers[i].Color;
+                    Color markerColor = markers[i].Color;
+                    if (markerColor.A == 0) continue;
                     string markerLabel = markers[i].Label ?? "";
 
                     if (markerDistanceSquared > radarRadius * radarRadius)
