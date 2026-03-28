@@ -99,6 +99,8 @@ class RdavMissileFeed
     public string SourceName;
     public List<MissilePoint> Missiles = new List<MissilePoint>();
     public double LastReceivedAt;
+    public double LastRuntimeMs;
+    public bool HasRuntime;
 }
 
 class TagChannel
@@ -585,6 +587,18 @@ string GetCachedTagRuntimeDisplay(string tag)
 {
     if ((elapsedSeconds - lastTagRuntimeRefreshAt) > TAG_RUNTIME_REFRESH_SECONDS)
         RefreshTagRuntimeCache();
+
+    foreach (var kv in rdavMissileFeeds)
+    {
+        var feed = kv.Value;
+        if ((elapsedSeconds - feed.LastReceivedAt) > RDAV_MISSILE_STALE_SECONDS)
+            continue;
+        if (!feed.HasRuntime)
+            continue;
+        if (feed.SourceName == null || feed.SourceName.IndexOf(tag, StringComparison.OrdinalIgnoreCase) < 0)
+            continue;
+        return feed.LastRuntimeMs.ToString("0.000") + " ms";
+    }
 
     string value;
     if (cachedTagRuntimeDisplay.TryGetValue(tag, out value))
@@ -1264,7 +1278,9 @@ void PollRdavMissileMessages()
 
         string sourceName;
         List<MissilePoint> missiles;
-        if (!TryParseRdavMissilePacket(payload, out sourceName, out missiles))
+        double runtimeMs;
+        bool hasRuntime;
+        if (!TryParseRdavMissilePacket(payload, out sourceName, out missiles, out runtimeMs, out hasRuntime))
             continue;
 
         RdavMissileFeed feed;
@@ -1277,13 +1293,17 @@ void PollRdavMissileMessages()
 
         feed.Missiles = missiles;
         feed.LastReceivedAt = elapsedSeconds;
+        feed.LastRuntimeMs = runtimeMs;
+        feed.HasRuntime = hasRuntime;
     }
 }
 
-bool TryParseRdavMissilePacket(string payload, out string sourceName, out List<MissilePoint> missiles)
+bool TryParseRdavMissilePacket(string payload, out string sourceName, out List<MissilePoint> missiles, out double runtimeMs, out bool hasRuntime)
 {
     sourceName = "";
     missiles = new List<MissilePoint>();
+    runtimeMs = 0;
+    hasRuntime = false;
 
     var parts = payload.Split('|');
     if (parts.Length < 4)
@@ -1291,6 +1311,8 @@ bool TryParseRdavMissilePacket(string payload, out string sourceName, out List<M
     if (!parts[0].Equals("VMISS", StringComparison.OrdinalIgnoreCase))
         return false;
 
+    int version = 1;
+    int.TryParse(parts[1], out version);
     sourceName = string.IsNullOrWhiteSpace(parts[2]) ? "RDAV" : parts[2];
     int count;
     if (!int.TryParse(parts[3], out count))
@@ -1298,11 +1320,22 @@ bool TryParseRdavMissilePacket(string payload, out string sourceName, out List<M
     if (count < 0)
         count = 0;
 
-    int expected = 4 + (count * 6);
+    int index = 4;
+    if (version >= 2)
+    {
+        double parsedRuntime;
+        if (parts.Length > 4 && double.TryParse(parts[4], out parsedRuntime))
+        {
+            runtimeMs = parsedRuntime;
+            hasRuntime = true;
+        }
+        index = 5;
+    }
+
+    int expected = index + (count * 6);
     if (parts.Length < expected)
         return false;
 
-    int index = 4;
     for (int i = 0; i < count; i++)
     {
         double px, py, pz, vx, vy, vz;

@@ -1306,7 +1306,7 @@
       { return; }
 
       StringBuilder packetBuilder = new StringBuilder();
-      packetBuilder.Append(MissileTelemetryPacketHeader).Append("|1|");
+      packetBuilder.Append(MissileTelemetryPacketHeader).Append("|2|");
       packetBuilder.Append(Me != null ? Me.CustomName : "RDAV").Append("|");
 
       int count = 0;
@@ -1322,6 +1322,7 @@
       }
 
       packetBuilder.Append(count);
+      packetBuilder.Append("|").Append(Runtime.LastRunTimeMs.ToString("0.###"));
       int written = 0;
       for (int i = 0; i < MISSILES.Count && written < count; i++)
       {
