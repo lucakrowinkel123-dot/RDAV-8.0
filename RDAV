@@ -50,7 +50,6 @@
   //Miscellaneous Settings
   const bool UseDefaultTargeting = false; // set this to true to enable 'default' targeting subsystems by default
   const bool RenameCockpit = true; //Renames the cockpit the script uses to help  diagnose issues
-  const int MissileLCD = 0; //LCD in the cockpit to use (keep this 0 unless you want it on a different screen)
   const int GravityAggressiveness = 5; //Alter this (0.5 - 4) to change how aggressive gravity counteraction is, good for firing at ground targets.
 
   bool Autoconnect = false;//Automatically connects missile connectors so its easier to use in survival
@@ -89,7 +88,6 @@
 
   //Shipside Required Blocks For Functionality
   RadarTrackingModule ThisTracker;
-  TrackingDisplay GUIPanel;
   IMyLightingBlock Alarm;
   IMyShipController RC;
 
@@ -1467,49 +1465,6 @@
       {
           GuiRefreshCounter = 0;
 
-          if (GUIPanel != null)
-          {
-              TrackingDisplay.RuntimeAgs runtimeAgs = new TrackingDisplay.RuntimeAgs();
-              runtimeAgs.ReferenceLocation = ExternalFeedActive ? ExternalSourcePosition : RC.GetPosition();
-              runtimeAgs.ReferenceForwards = ExternalFeedActive && ExternalSourceForward.LengthSquared() > 0.001 ? Vector3D.Normalize(ExternalSourceForward) : RC.WorldMatrix.Forward;
-              runtimeAgs.ReferenceUpwards = ExternalFeedActive && ExternalSourceUp.LengthSquared() > 0.001 ? Vector3D.Normalize(ExternalSourceUp) : RC.WorldMatrix.Up;
-              runtimeAgs.ReferenceMarkerLocation = ExternalFeedActive ? RC.GetPosition() : runtimeAgs.ReferenceLocation;
-              runtimeAgs.DrawReferenceMarker = true;
-              runtimeAgs.TargetLock = HasTarget;
-              runtimeAgs.Targetmode = "RDAR";
-              runtimeAgs.Targetinfoline1 = ThisTracker.GetLine1Info();
-              runtimeAgs.Targetinfoline2 = ThisTracker.GetLine2Info();
-              runtimeAgs.MissileRemainingCount = MissileRemainingCount;
-              runtimeAgs.ToDisplay = new List<TrackingDisplay.TargetInfo>();
-              runtimeAgs.BoostMode = ThisTracker.BoostMode;
-
-              //Adds All active Missiles
-              foreach (var missile in MISSILES)
-              {
-                  if (missile.ReadyAndActive && missile.ThrustersIgnited)
-                  {
-                      TrackingDisplay.TargetInfo targetInfo = new TrackingDisplay.TargetInfo();
-                      targetInfo.RenderColour = Color.RoyalBlue;
-                      targetInfo.Location = missile.WorldLocation;
-                      targetInfo.Velocity = missile.WorldVelocity * 30;
-
-                      runtimeAgs.ToDisplay.Add(targetInfo);
-                  }
-              }
-
-              //Adds Target (If Tracking)
-              if (HasTarget)
-              {
-                  TrackingDisplay.TargetInfo targetInfo = new TrackingDisplay.TargetInfo();
-                  targetInfo.RenderColour = Color.Red;
-                  targetInfo.Location = TrackedTargetLocation;
-                  targetInfo.Velocity = TrackedTargetVelocity * 30;
-
-                  runtimeAgs.ToDisplay.Add(targetInfo);
-              }
-
-              GUIPanel.DrawGUI(runtimeAgs);
-          }
           BroadcastMissileTelemetry();
       }
 
