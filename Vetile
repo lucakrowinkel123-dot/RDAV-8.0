@@ -14,6 +14,7 @@ const bool AUTO_ENABLE_PROJECTOR = true;
 const float TANK_FULL_THRESHOLD = 0.8f;
 const double TANK_SCAN_COOLDOWN_SECONDS = 2.0;
 const string SUMMARY_LCD_TAG = "#Vetile#";
+const string RADAR_LCD_TAG = "#VetileRadar#";
 const double FIREALL_INTERVAL_SECONDS = 0.2;
 const int FIREALL_MAX_ATTEMPTS_PER_TAG = 10;
 const double FIREALL_MAX_SECONDS = 10.0;
@@ -29,7 +30,9 @@ const string TARGET_PACKET_HEADER = "VTARGET";
 const string TARGET_PACKET_VERSION = "1";
 const string IGC_SCOUT_CHANNEL = "VETILE_SCOUT_TARGET";
 const string IGC_SCOUT_CONTROL_CHANNEL = "VETILE_SCOUT_CONTROL";
+const string IGC_RDAV_MISSILE_CHANNEL = "VETILE_RDAV_MISSILES";
 const double REMOTE_TARGET_STALE_SECONDS = 2.0;
+const double RDAV_MISSILE_STALE_SECONDS = 2.0;
 const string RDAV_STATUS_NONE = "NO_TARGET";
 const string SOURCE_ID_KEY = "SourceId";
 
@@ -83,6 +86,19 @@ class RemoteSourceState
     public double LastReceivedAt;
 }
 
+struct MissilePoint
+{
+    public Vector3D Position;
+    public Vector3D Velocity;
+}
+
+class RdavMissileFeed
+{
+    public string SourceName;
+    public List<MissilePoint> Missiles = new List<MissilePoint>();
+    public double LastReceivedAt;
+}
+
 class TagChannel
 {
     public string Tag;
@@ -111,6 +127,7 @@ class TagChannel
 Dictionary<string, TagChannel> channels = new Dictionary<string, TagChannel>();
 double elapsedSeconds;
 IMyTextPanel summaryLcd;
+IMyTextPanel radarLcd;
 IMySoundBlock alertSoundBlock;
 IMyShipController navController;
 TargetPriorityMode globalTargetMode = TargetPriorityMode.Largest;
@@ -123,9 +140,11 @@ double warheadRangeCheckTimer;
 int warheadRangeCheckTagIndex;
 double summaryLcdTimer;
 IMyBroadcastListener scoutListener;
+IMyBroadcastListener rdavMissileListener;
 TargetSourceMode targetSourceMode = TargetSourceMode.Local;
 Dictionary<string, RemoteSourceState> remoteSources = new Dictionary<string, RemoteSourceState>();
 List<string> remoteSourceOrder = new List<string>();
+Dictionary<string, RdavMissileFeed> rdavMissileFeeds = new Dictionary<string, RdavMissileFeed>();
 int selectedRemoteIndex;
 TargetPacket activeTargetPacket;
 double activeTargetDistanceMeters = -1;
@@ -143,9 +162,11 @@ public Program()
 
     LoadBlocksAll();
     LoadSummaryLcd();
+    LoadRadarLcd();
     LoadAlertSoundBlock();
     LoadNavController();
     RegisterScoutListener();
+    RegisterRdavMissileListener();
 }
 
 public void Save() { }
@@ -161,6 +182,7 @@ public void Main(string argument, UpdateType updateSource)
             LoadConfig();
             LoadBlocksAll();
             LoadSummaryLcd();
+            LoadRadarLcd();
             LoadAlertSoundBlock();
             LoadNavController();
         }
@@ -235,6 +257,7 @@ public void Main(string argument, UpdateType updateSource)
     }
 
     PollScoutMessages();
+    PollRdavMissileMessages();
     ResolveAndForwardTarget();
 
     foreach (var kv in channels)
@@ -265,6 +288,7 @@ public void Main(string argument, UpdateType updateSource)
     {
         summaryLcdTimer = 0;
         UpdateSummaryLcd();
+        UpdateRadarLcd();
     }
 
     UpdateRuntimeFrequency();
@@ -477,6 +501,13 @@ void LoadSummaryLcd()
     summaryLcd = lcds.Count > 0 ? lcds[0] : null;
 }
 
+void LoadRadarLcd()
+{
+    var lcds = new List<IMyTextPanel>();
+    GridTerminalSystem.GetBlocksOfType(lcds, b => b.CustomName != null && b.CustomName.IndexOf(RADAR_LCD_TAG, StringComparison.OrdinalIgnoreCase) >= 0);
+    radarLcd = lcds.Count > 0 ? lcds[0] : null;
+}
+
 void LoadAlertSoundBlock()
 {
     var sounds = new List<IMySoundBlock>();
@@ -532,6 +563,79 @@ void UpdateSummaryLcd()
     }
 
     summaryLcd.WriteText(text.ToString(), false);
+}
+
+void UpdateRadarLcd()
+{
+    if (radarLcd == null)
+        return;
+
+    radarLcd.ContentType = VRage.Game.GUI.TextPanel.ContentType.SCRIPT;
+    radarLcd.BackgroundColor = Color.Black;
+
+    var surfaceSize = radarLcd.SurfaceSize;
+    var textureSize = radarLcd.TextureSize;
+    var center = (textureSize - surfaceSize) / 2f + surfaceSize / 2f;
+    float minDim = Math.Min(surfaceSize.X, surfaceSize.Y);
+    float radius = minDim * 0.38f;
+
+    Vector3D origin = navController != null ? navController.GetPosition() : Me.GetPosition();
+    Vector3D forward = navController != null ? navController.WorldMatrix.Forward : Me.WorldMatrix.Forward;
+    Vector3D up = navController != null ? navController.WorldMatrix.Up : Me.WorldMatrix.Up;
+    MatrixD viewInv = MatrixD.Invert(MatrixD.CreateWorld(origin, forward, up));
+
+    using (var frame = radarLcd.DrawFrame())
+    {
+        frame.Add(new MySprite(SpriteType.TEXTURE, "CircleHollow", center, new Vector2(radius * 2f, radius * 2f), Color.White));
+        frame.Add(new MySprite(SpriteType.TEXTURE, "SquareSimple", center, new Vector2(radius * 2f, 1.5f), Color.DimGray));
+        frame.Add(new MySprite(SpriteType.TEXTURE, "SquareSimple", center, new Vector2(1.5f, radius * 2f), Color.DimGray));
+        frame.Add(new MySprite(SpriteType.TEXTURE, "Circle", center, new Vector2(8f, 8f), Color.LimeGreen));
+
+        foreach (var kv in rdavMissileFeeds)
+        {
+            var feed = kv.Value;
+            if ((elapsedSeconds - feed.LastReceivedAt) > RDAV_MISSILE_STALE_SECONDS)
+                continue;
+
+            for (int i = 0; i < feed.Missiles.Count; i++)
+            {
+                Vector2 pos;
+                if (!ProjectRadarPoint(viewInv, feed.Missiles[i].Position, center, radius, out pos))
+                    continue;
+                frame.Add(new MySprite(SpriteType.TEXTURE, "SquareSimple", pos, new Vector2(7f, 7f), Color.RoyalBlue));
+            }
+        }
+
+        if (activeTargetPacket.HasTarget)
+        {
+            Vector2 targetPos;
+            if (ProjectRadarPoint(viewInv, activeTargetPacket.TargetPosition, center, radius, out targetPos))
+            {
+                frame.Add(new MySprite(SpriteType.TEXTURE, "SquareSimple", targetPos, new Vector2(10f, 10f), Color.Red));
+            }
+        }
+    }
+}
+
+bool ProjectRadarPoint(MatrixD worldToLocal, Vector3D worldPosition, Vector2 center, float radius, out Vector2 radarPoint)
+{
+    Vector3D localPos = Vector3D.Transform(worldPosition, worldToLocal);
+    const float pixelsPerMeter = 0.08f;
+    Vector2 offset = new Vector2((float)localPos.X, (float)localPos.Z) * pixelsPerMeter;
+
+    float offsetLen = offset.Length();
+    if (offsetLen > radius)
+    {
+        if (offsetLen < 0.001f)
+        {
+            radarPoint = center;
+            return true;
+        }
+        offset = offset / offsetLen * radius;
+    }
+
+    radarPoint = center + offset;
+    return true;
 }
 
 void AutoDetonateOutOfRangeWarheadsNextTag()
@@ -984,6 +1088,12 @@ void RegisterScoutListener()
     scoutListener.SetMessageCallback("scout");
 }
 
+void RegisterRdavMissileListener()
+{
+    rdavMissileListener = IGC.RegisterBroadcastListener(IGC_RDAV_MISSILE_CHANNEL);
+    rdavMissileListener.SetMessageCallback("rdavm");
+}
+
 void PollScoutMessages()
 {
     if (scoutListener == null)
@@ -1016,6 +1126,78 @@ void PollScoutMessages()
         state.LastReceivedAt = elapsedSeconds;
         state.HasPacket = true;
     }
+}
+
+void PollRdavMissileMessages()
+{
+    if (rdavMissileListener == null)
+        return;
+
+    while (rdavMissileListener.HasPendingMessage)
+    {
+        var message = rdavMissileListener.AcceptMessage();
+        string payload = message.Data as string;
+        if (string.IsNullOrWhiteSpace(payload))
+            continue;
+
+        string sourceName;
+        List<MissilePoint> missiles;
+        if (!TryParseRdavMissilePacket(payload, out sourceName, out missiles))
+            continue;
+
+        RdavMissileFeed feed;
+        if (!rdavMissileFeeds.TryGetValue(sourceName, out feed))
+        {
+            feed = new RdavMissileFeed();
+            feed.SourceName = sourceName;
+            rdavMissileFeeds[sourceName] = feed;
+        }
+
+        feed.Missiles = missiles;
+        feed.LastReceivedAt = elapsedSeconds;
+    }
+}
+
+bool TryParseRdavMissilePacket(string payload, out string sourceName, out List<MissilePoint> missiles)
+{
+    sourceName = "";
+    missiles = new List<MissilePoint>();
+
+    var parts = payload.Split('|');
+    if (parts.Length < 4)
+        return false;
+    if (!parts[0].Equals("VMISS", StringComparison.OrdinalIgnoreCase))
+        return false;
+
+    sourceName = string.IsNullOrWhiteSpace(parts[2]) ? "RDAV" : parts[2];
+    int count;
+    if (!int.TryParse(parts[3], out count))
+        return false;
+    if (count < 0)
+        count = 0;
+
+    int expected = 4 + (count * 6);
+    if (parts.Length < expected)
+        return false;
+
+    int index = 4;
+    for (int i = 0; i < count; i++)
+    {
+        double px, py, pz, vx, vy, vz;
+        if (!double.TryParse(parts[index++], out px)) return false;
+        if (!double.TryParse(parts[index++], out py)) return false;
+        if (!double.TryParse(parts[index++], out pz)) return false;
+        if (!double.TryParse(parts[index++], out vx)) return false;
+        if (!double.TryParse(parts[index++], out vy)) return false;
+        if (!double.TryParse(parts[index++], out vz)) return false;
+
+        MissilePoint missile = new MissilePoint();
+        missile.Position = new Vector3D(px, py, pz);
+        missile.Velocity = new Vector3D(vx, vy, vz);
+        missiles.Add(missile);
+    }
+
+    return true;
 }
 
 void ResolveAndForwardTarget()
@@ -1074,9 +1256,17 @@ bool TryGetLocalPacket(out TargetPacket packet)
 bool TryGetRemotePacket(out TargetPacket packet)
 {
     packet = BuildNoTargetPacket();
+    if (remoteSourceOrder.Count == 0)
+        return false;
+
+    // Keep operator selection stable: do not silently jump to another remote source
+    // if the selected source goes stale or temporarily drops target lock.
     if (TryGetSelectedRemotePacket(out packet))
         return true;
-    return TryGetBestAvailableRemotePacket(out packet);
+
+    packet = BuildNoTargetPacket();
+    packet.SourceName = GetSelectedRemoteNameOrDefault();
+    return true;
 }
 
 bool TryGetSelectedRemotePacket(out TargetPacket packet)
