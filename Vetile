@@ -14,6 +14,7 @@ const bool AUTO_ENABLE_PROJECTOR = true;
 const float TANK_FULL_THRESHOLD = 0.8f;
 const double TANK_SCAN_COOLDOWN_SECONDS = 2.0;
 const string SUMMARY_LCD_TAG = "#Vetile#";
+const string RADAR_LCD_TAG = "#VetileRadar#";
 const double FIREALL_INTERVAL_SECONDS = 0.2;
 const int FIREALL_MAX_ATTEMPTS_PER_TAG = 10;
 const double FIREALL_MAX_SECONDS = 10.0;
@@ -29,7 +30,9 @@ const string TARGET_PACKET_HEADER = "VTARGET";
 const string TARGET_PACKET_VERSION = "1";
 const string IGC_SCOUT_CHANNEL = "VETILE_SCOUT_TARGET";
 const string IGC_SCOUT_CONTROL_CHANNEL = "VETILE_SCOUT_CONTROL";
+const string IGC_RDAV_MISSILE_CHANNEL = "VETILE_RDAV_MISSILES";
 const double REMOTE_TARGET_STALE_SECONDS = 2.0;
+const double RDAV_MISSILE_STALE_SECONDS = 2.0;
 const string RDAV_STATUS_NONE = "NO_TARGET";
 const string SOURCE_ID_KEY = "SourceId";
 
@@ -83,6 +86,19 @@ class RemoteSourceState
     public double LastReceivedAt;
 }
 
+struct MissilePoint
+{
+    public Vector3D Position;
+    public Vector3D Velocity;
+}
+
+class RdavMissileFeed
+{
+    public string SourceName;
+    public List<MissilePoint> Missiles = new List<MissilePoint>();
+    public double LastReceivedAt;
+}
+
 class TagChannel
 {
     public string Tag;
@@ -111,6 +127,8 @@ class TagChannel
 Dictionary<string, TagChannel> channels = new Dictionary<string, TagChannel>();
 double elapsedSeconds;
 IMyTextPanel summaryLcd;
+IMyTextPanel radarLcd;
+VetileRadarDisplay radarDisplay;
 IMySoundBlock alertSoundBlock;
 IMyShipController navController;
 TargetPriorityMode globalTargetMode = TargetPriorityMode.Largest;
@@ -123,9 +141,11 @@ double warheadRangeCheckTimer;
 int warheadRangeCheckTagIndex;
 double summaryLcdTimer;
 IMyBroadcastListener scoutListener;
+IMyBroadcastListener rdavMissileListener;
 TargetSourceMode targetSourceMode = TargetSourceMode.Local;
 Dictionary<string, RemoteSourceState> remoteSources = new Dictionary<string, RemoteSourceState>();
 List<string> remoteSourceOrder = new List<string>();
+Dictionary<string, RdavMissileFeed> rdavMissileFeeds = new Dictionary<string, RdavMissileFeed>();
 int selectedRemoteIndex;
 TargetPacket activeTargetPacket;
 double activeTargetDistanceMeters = -1;
@@ -143,9 +163,11 @@ public Program()
 
     LoadBlocksAll();
     LoadSummaryLcd();
+    LoadRadarLcd();
     LoadAlertSoundBlock();
     LoadNavController();
     RegisterScoutListener();
+    RegisterRdavMissileListener();
 }
 
 public void Save() { }
@@ -161,6 +183,7 @@ public void Main(string argument, UpdateType updateSource)
             LoadConfig();
             LoadBlocksAll();
             LoadSummaryLcd();
+            LoadRadarLcd();
             LoadAlertSoundBlock();
             LoadNavController();
         }
@@ -235,6 +258,7 @@ public void Main(string argument, UpdateType updateSource)
     }
 
     PollScoutMessages();
+    PollRdavMissileMessages();
     ResolveAndForwardTarget();
 
     foreach (var kv in channels)
@@ -265,6 +289,7 @@ public void Main(string argument, UpdateType updateSource)
     {
         summaryLcdTimer = 0;
         UpdateSummaryLcd();
+        UpdateRadarLcd();
     }
 
     UpdateRuntimeFrequency();
@@ -477,6 +502,14 @@ void LoadSummaryLcd()
     summaryLcd = lcds.Count > 0 ? lcds[0] : null;
 }
 
+void LoadRadarLcd()
+{
+    var lcds = new List<IMyTextPanel>();
+    GridTerminalSystem.GetBlocksOfType(lcds, b => b.CustomName != null && b.CustomName.IndexOf(RADAR_LCD_TAG, StringComparison.OrdinalIgnoreCase) >= 0);
+    radarLcd = lcds.Count > 0 ? lcds[0] : null;
+    radarDisplay = radarLcd != null ? new VetileRadarDisplay(radarLcd) : null;
+}
+
 void LoadAlertSoundBlock()
 {
     var sounds = new List<IMySoundBlock>();
@@ -532,6 +565,69 @@ void UpdateSummaryLcd()
     }
 
     summaryLcd.WriteText(text.ToString(), false);
+}
+
+void UpdateRadarLcd()
+{
+    if (radarDisplay == null)
+        return;
+
+    Vector3D origin = navController != null ? navController.GetPosition() : Me.GetPosition();
+    Vector3D forward = navController != null ? navController.WorldMatrix.Forward : Me.WorldMatrix.Forward;
+    Vector3D up = navController != null ? navController.WorldMatrix.Up : Me.WorldMatrix.Up;
+
+    VetileRadarDisplay.RuntimeAgs runtimeAgs = new VetileRadarDisplay.RuntimeAgs();
+    runtimeAgs.ReferenceLocation = origin;
+    runtimeAgs.ReferenceForwards = forward;
+    runtimeAgs.ReferenceUpwards = up;
+    runtimeAgs.ReferenceMarkerLocation = activeTargetPacket.SourcePosition;
+    runtimeAgs.DrawReferenceMarker = true;
+    runtimeAgs.TargetLock = activeTargetPacket.HasTarget;
+    runtimeAgs.Targetmode = "VTL";
+    runtimeAgs.Targetinfoline1 = "SRC: " + activeTargetPacket.SourceName;
+    runtimeAgs.Targetinfoline2 = activeTargetPacket.HasTarget ? ("ID: " + activeTargetPacket.TargetId) : RDAV_STATUS_NONE;
+    runtimeAgs.MissileRemainingCount = CountActiveMissileTelemetry();
+    runtimeAgs.ToDisplay = new List<VetileRadarDisplay.TargetInfo>();
+    runtimeAgs.BoostMode = false;
+
+    foreach (var kv in rdavMissileFeeds)
+    {
+        var feed = kv.Value;
+        if ((elapsedSeconds - feed.LastReceivedAt) > RDAV_MISSILE_STALE_SECONDS)
+            continue;
+
+        for (int i = 0; i < feed.Missiles.Count; i++)
+        {
+            VetileRadarDisplay.TargetInfo missileInfo = new VetileRadarDisplay.TargetInfo();
+            missileInfo.RenderColour = Color.RoyalBlue;
+            missileInfo.Location = feed.Missiles[i].Position;
+            missileInfo.Velocity = feed.Missiles[i].Velocity;
+            runtimeAgs.ToDisplay.Add(missileInfo);
+        }
+    }
+
+    if (activeTargetPacket.HasTarget)
+    {
+        VetileRadarDisplay.TargetInfo targetInfo = new VetileRadarDisplay.TargetInfo();
+        targetInfo.RenderColour = Color.Red;
+        targetInfo.Location = activeTargetPacket.TargetPosition;
+        targetInfo.Velocity = activeTargetPacket.TargetVelocity * 30;
+        runtimeAgs.ToDisplay.Add(targetInfo);
+    }
+
+    radarDisplay.DrawGUI(runtimeAgs);
+}
+
+int CountActiveMissileTelemetry()
+{
+    int count = 0;
+    foreach (var kv in rdavMissileFeeds)
+    {
+        if ((elapsedSeconds - kv.Value.LastReceivedAt) > RDAV_MISSILE_STALE_SECONDS)
+            continue;
+        count += kv.Value.Missiles.Count;
+    }
+    return count;
 }
 
 void AutoDetonateOutOfRangeWarheadsNextTag()
@@ -984,6 +1080,12 @@ void RegisterScoutListener()
     scoutListener.SetMessageCallback("scout");
 }
 
+void RegisterRdavMissileListener()
+{
+    rdavMissileListener = IGC.RegisterBroadcastListener(IGC_RDAV_MISSILE_CHANNEL);
+    rdavMissileListener.SetMessageCallback("rdavm");
+}
+
 void PollScoutMessages()
 {
     if (scoutListener == null)
@@ -1016,6 +1118,78 @@ void PollScoutMessages()
         state.LastReceivedAt = elapsedSeconds;
         state.HasPacket = true;
     }
+}
+
+void PollRdavMissileMessages()
+{
+    if (rdavMissileListener == null)
+        return;
+
+    while (rdavMissileListener.HasPendingMessage)
+    {
+        var message = rdavMissileListener.AcceptMessage();
+        string payload = message.Data as string;
+        if (string.IsNullOrWhiteSpace(payload))
+            continue;
+
+        string sourceName;
+        List<MissilePoint> missiles;
+        if (!TryParseRdavMissilePacket(payload, out sourceName, out missiles))
+            continue;
+
+        RdavMissileFeed feed;
+        if (!rdavMissileFeeds.TryGetValue(sourceName, out feed))
+        {
+            feed = new RdavMissileFeed();
+            feed.SourceName = sourceName;
+            rdavMissileFeeds[sourceName] = feed;
+        }
+
+        feed.Missiles = missiles;
+        feed.LastReceivedAt = elapsedSeconds;
+    }
+}
+
+bool TryParseRdavMissilePacket(string payload, out string sourceName, out List<MissilePoint> missiles)
+{
+    sourceName = "";
+    missiles = new List<MissilePoint>();
+
+    var parts = payload.Split('|');
+    if (parts.Length < 4)
+        return false;
+    if (!parts[0].Equals("VMISS", StringComparison.OrdinalIgnoreCase))
+        return false;
+
+    sourceName = string.IsNullOrWhiteSpace(parts[2]) ? "RDAV" : parts[2];
+    int count;
+    if (!int.TryParse(parts[3], out count))
+        return false;
+    if (count < 0)
+        count = 0;
+
+    int expected = 4 + (count * 6);
+    if (parts.Length < expected)
+        return false;
+
+    int index = 4;
+    for (int i = 0; i < count; i++)
+    {
+        double px, py, pz, vx, vy, vz;
+        if (!double.TryParse(parts[index++], out px)) return false;
+        if (!double.TryParse(parts[index++], out py)) return false;
+        if (!double.TryParse(parts[index++], out pz)) return false;
+        if (!double.TryParse(parts[index++], out vx)) return false;
+        if (!double.TryParse(parts[index++], out vy)) return false;
+        if (!double.TryParse(parts[index++], out vz)) return false;
+
+        MissilePoint missile = new MissilePoint();
+        missile.Position = new Vector3D(px, py, pz);
+        missile.Velocity = new Vector3D(vx, vy, vz);
+        missiles.Add(missile);
+    }
+
+    return true;
 }
 
 void ResolveAndForwardTarget()
@@ -1074,9 +1248,17 @@ bool TryGetLocalPacket(out TargetPacket packet)
 bool TryGetRemotePacket(out TargetPacket packet)
 {
     packet = BuildNoTargetPacket();
+    if (remoteSourceOrder.Count == 0)
+        return false;
+
+    // Keep operator selection stable: do not silently jump to another remote source
+    // if the selected source goes stale or temporarily drops target lock.
     if (TryGetSelectedRemotePacket(out packet))
         return true;
-    return TryGetBestAvailableRemotePacket(out packet);
+
+    packet = BuildNoTargetPacket();
+    packet.SourceName = GetSelectedRemoteNameOrDefault();
+    return true;
 }
 
 bool TryGetSelectedRemotePacket(out TargetPacket packet)
@@ -1392,4 +1574,238 @@ void EchoSummary()
         Echo("FireAll motion guard: no tagged ship controller (#Vetile#)");
     else
         Echo($"FireAll limits: speed<={FIREALL_MAX_SPEED_MPS:0}m/s lateral<={FIREALL_MAX_LATERAL_SPEED_MPS:0}m/s yaw<={FIREALL_MAX_YAW_RATE_RAD:0.00}rad/s");
+}
+
+public class VetileRadarDisplay
+{
+    static IMyTextSurface RenderingSurface;
+    Vector2 SurfaceScaleToScreenSpace;
+    Vector2 SurfOffsetToScreenSpace;
+
+    const string SolidSquare = "SquareSimple";
+    const string SquareHollow = "SquareHollow";
+    const string CircleHollow = "CircleHollow";
+    const string Circle = "Circle";
+
+    public VetileRadarDisplay(IMyTextSurface textSurface)
+    {
+        RenderingSurface = textSurface;
+        textSurface.ContentType = VRage.Game.GUI.TextPanel.ContentType.SCRIPT;
+        textSurface.Script = "";
+        textSurface.ScriptBackgroundColor = Color.Black;
+
+        Vector2 surfaceSize = textSurface.SurfaceSize;
+        Vector2 textureSize = textSurface.TextureSize;
+        float minScale = Math.Min(surfaceSize.X, surfaceSize.Y);
+        SurfaceScaleToScreenSpace = new Vector2(minScale, minScale);
+        Vector2 squareRenderSize = SurfaceScaleToScreenSpace;
+        SurfOffsetToScreenSpace = (textureSize - squareRenderSize) / 2f;
+    }
+
+    public static MySprite DrawLine(Vector2 pt1, Vector2 pt2, float thickness, Color colour)
+    {
+        Vector2 position = 0.5f * (pt1 + pt2);
+        Vector2 diff = pt1 - pt2;
+        float rectlength = diff.Length();
+        if (rectlength > 0) diff /= rectlength;
+        Vector2 rectsize = new Vector2(rectlength, thickness);
+        float angle = (float)Math.Acos(Vector2.Dot(diff, Vector2.UnitX));
+        angle *= Math.Sign(Vector2.Dot(diff, Vector2.UnitY));
+
+        MySprite linesprite = MySprite.CreateSprite(SolidSquare, position, rectsize);
+        linesprite.RotationOrScale = angle;
+        linesprite.Color = colour;
+        return linesprite;
+    }
+
+    public static MySprite DrawRectangle_FromCntr(Vector2 center, float dimx, float dimy, Color colour, bool fill)
+    {
+        string type = fill ? SolidSquare : SquareHollow;
+        MySprite recsprite = MySprite.CreateSprite(type, center, new Vector2(dimx, dimy));
+        recsprite.Color = colour;
+        return recsprite;
+    }
+
+    public static MySprite DrawCircle(Vector2 center, float radius, Color colour, bool fill)
+    {
+        string type = fill ? Circle : CircleHollow;
+        MySprite recsprite = MySprite.CreateSprite(type, center, new Vector2(radius * 2, radius * 2));
+        recsprite.Color = colour;
+        return recsprite;
+    }
+
+    public static MySprite DrawText(string text, Vector2 position, Color color, float scale = 1.0f, TextAlignment alignment = TextAlignment.CENTER)
+    {
+        MySprite textSprite = new MySprite()
+        {
+            Type = SpriteType.TEXT,
+            Data = text,
+            Position = position,
+            RotationOrScale = scale / 512.0f,
+            Color = color,
+            Alignment = alignment,
+            FontId = "Debug"
+        };
+        return textSprite;
+    }
+
+    public List<MySprite> DrawRuntimeUI(Vector2 centerPos, float value, float scale = 1 / 512f)
+    {
+        List<MySprite> frame = new List<MySprite>();
+        frame.Add(new MySprite(SpriteType.TEXTURE, "Screen_LoadingBar", new Vector2(0f, -16f) * scale + centerPos, new Vector2(300f, 300f) * scale, new Color(40, 40, 40, 255), null, TextAlignment.CENTER, value));
+        return frame;
+    }
+
+    public List<MySprite> DrawFixedUI(Vector2 centerPos, float scale = 1 / 512f)
+    {
+        List<MySprite> frame = new List<MySprite>();
+        frame.Add(new MySprite(SpriteType.TEXTURE, "CircleHollow", new Vector2(0f, -16f) * scale + centerPos, new Vector2(400f, 400f) * scale, Color.White, null, TextAlignment.CENTER, 0f));
+        frame.Add(new MySprite(SpriteType.TEXTURE, "CircleHollow", new Vector2(0f, -16f) * scale + centerPos, new Vector2(396f, 396f) * scale, Color.Black, null, TextAlignment.CENTER, 0f));
+        frame.Add(new MySprite(SpriteType.TEXTURE, "CircleHollow", new Vector2(0f, -16f) * scale + centerPos, new Vector2(240f, 240f) * scale, Color.White, null, TextAlignment.CENTER, 0f));
+        frame.Add(new MySprite(SpriteType.TEXTURE, "CircleHollow", new Vector2(0f, -16f) * scale + centerPos, new Vector2(234f, 234f) * scale, Color.Black, null, TextAlignment.CENTER, 0f));
+        frame.Add(new MySprite(SpriteType.TEXTURE, "Circle", new Vector2(0f, -16f) * scale + centerPos, new Vector2(11f, 11f) * scale, Color.White, null, TextAlignment.CENTER, 0f));
+        frame.Add(new MySprite(SpriteType.TEXTURE, "SquareSimple", new Vector2(0f, -16f) * scale + centerPos, new Vector2(430f, 1f) * scale, Color.White, null, TextAlignment.CENTER, 0f));
+        frame.Add(new MySprite(SpriteType.TEXTURE, "SquareSimple", new Vector2(0f, -16f) * scale + centerPos, new Vector2(1f, 430f) * scale, Color.White, null, TextAlignment.CENTER, 0f));
+        frame.Add(new MySprite(SpriteType.TEXTURE, "SquareHollow", new Vector2(-174f, 200f) * scale + centerPos, new Vector2(130f, 88f) * scale, Color.White, null, TextAlignment.CENTER, 0f));
+        frame.Add(new MySprite(SpriteType.TEXT, "x", new Vector2(-199f, 173f) * scale + centerPos, null, Color.White, "Debug", TextAlignment.LEFT, 1.4f * scale));
+        frame.Add(new MySprite(SpriteType.TEXTURE, "DecorativeBracketRight", new Vector2(230f, -13f) * scale + centerPos, new Vector2(31f, 175f) * scale, Color.White, null, TextAlignment.CENTER, 0f));
+        frame.Add(new MySprite(SpriteType.TEXTURE, "DecorativeBracketLeft", new Vector2(-230f, -13f) * scale + centerPos, new Vector2(31f, 175f) * scale, Color.White, null, TextAlignment.CENTER, 0f));
+        frame.Add(new MySprite(SpriteType.TEXTURE, "Triangle", new Vector2(-218f, 216f) * scale + centerPos, new Vector2(19f, 29f) * scale, Color.White, null, TextAlignment.CENTER, 0f));
+        frame.Add(new MySprite(SpriteType.TEXTURE, "Circle", new Vector2(-218f, 178f) * scale + centerPos, new Vector2(17f, 19f) * scale, Color.White, null, TextAlignment.CENTER, 0f));
+        frame.Add(new MySprite(SpriteType.TEXTURE, "SquareSimple", new Vector2(-218f, 198f) * scale + centerPos, new Vector2(17f, 37f) * scale, Color.White, null, TextAlignment.CENTER, 0f));
+        frame.Add(new MySprite(SpriteType.TEXTURE, "SquareSimple", new Vector2(-218f, 197f) * scale + centerPos, new Vector2(5f, 31f) * scale, Color.Black, null, TextAlignment.CENTER, 0f));
+        frame.Add(new MySprite(SpriteType.TEXTURE, "SquareHollow", new Vector2(174f, 200f) * scale + centerPos, new Vector2(130f, 88f) * scale, Color.White, null, TextAlignment.CENTER, 0f));
+        frame.Add(new MySprite(SpriteType.TEXT, "1.5Km", new Vector2(-17f, 104f) * scale + centerPos, null, Color.White, "Debug", TextAlignment.LEFT, 0.5f * scale));
+        frame.Add(new MySprite(SpriteType.TEXT, "2.5Km", new Vector2(-21f, 186f) * scale + centerPos, null, Color.White, "Debug", TextAlignment.LEFT, 0.5f * scale));
+        frame.Add(new MySprite(SpriteType.TEXT, "VET", new Vector2(-153f, 216f) * scale + centerPos, null, Color.White, "Debug", TextAlignment.CENTER, 0.6f * scale));
+        return frame;
+    }
+
+    public List<MySprite> DrawTargetLockUI(Vector2 centerPos, float scale = 1 / 512f)
+    {
+        List<MySprite> frame = new List<MySprite>();
+        frame.Add(new MySprite(SpriteType.TEXTURE, "SquareSimple", new Vector2(0f, 223f) * scale + centerPos, new Vector2(133f, 37f) * scale, Color.Red, null, TextAlignment.CENTER, 0f));
+        frame.Add(new MySprite(SpriteType.TEXT, "TARGET LOCK", new Vector2(-1f, 211f) * scale + centerPos, null, Color.White, "Debug", TextAlignment.CENTER, 0.7f * scale));
+        return frame;
+    }
+
+    public List<MySprite> DrawDynamicUI(Vector2 centerPos, string missilesRemaining, string lockType, string line1, string line2, float scale = 1 / 512f)
+    {
+        List<MySprite> frame = new List<MySprite>();
+        frame.Add(new MySprite(SpriteType.TEXT, missilesRemaining, new Vector2(-177f, 172f) * scale + centerPos, null, Color.White, "Debug", TextAlignment.LEFT, 1.6f * scale));
+        frame.Add(new MySprite(SpriteType.TEXT, lockType, new Vector2(121f, 158f) * scale + centerPos, null, Color.White, "Debug", TextAlignment.LEFT, 1.4f * scale));
+        frame.Add(new MySprite(SpriteType.TEXT, line1, new Vector2(121f, 211f) * scale + centerPos, null, Color.White, "Debug", TextAlignment.LEFT, 0.6f * scale));
+        frame.Add(new MySprite(SpriteType.TEXT, line2, new Vector2(121f, 193f) * scale + centerPos, null, Color.White, "Debug", TextAlignment.LEFT, 0.6f * scale));
+        return frame;
+    }
+
+    public void ProjectToPlane(MatrixD worldToLocal, Vector3D location, Vector3D velocity, out Vector2 locationScreenspace, out Vector2 velocityIndicator)
+    {
+        const float pixelsPerMeter = 0.5f * 0.16f;
+        const float screenUnitsPerMeter = pixelsPerMeter / 512.0f;
+        Vector2 radarCenter = new Vector2(0.5f, 0.5f) + new Vector2(0, -16) / 512.0f;
+        Vector3D localPos = Vector3D.Transform(location, worldToLocal);
+        locationScreenspace = radarCenter + new Vector2((float)localPos.X, (float)localPos.Z) * screenUnitsPerMeter;
+
+        Vector3D localVelocity = Vector3D.TransformNormal(velocity, worldToLocal);
+        if (localVelocity.LengthSquared() > 0) localVelocity = Vector3D.Normalize(localVelocity);
+        velocityIndicator = locationScreenspace + new Vector2((float)localVelocity.X, (float)localVelocity.Z) * 0.05f;
+    }
+
+    float sweepAngle = 0f;
+    const float SweepSpeed = 0.05f;
+    int BullshitTimer = 0;
+
+    public struct TargetInfo
+    {
+        public Vector3D Location;
+        public Vector3D Velocity;
+        public Color RenderColour;
+    }
+
+    public struct RuntimeAgs
+    {
+        public Vector3D ReferenceLocation;
+        public Vector3D ReferenceForwards;
+        public Vector3D ReferenceUpwards;
+        public Vector3D ReferenceMarkerLocation;
+        public bool DrawReferenceMarker;
+        public List<TargetInfo> ToDisplay;
+        public string Targetmode;
+        public string Targetinfoline1;
+        public string Targetinfoline2;
+        public int MissileRemainingCount;
+        public bool TargetLock;
+        public bool BoostMode;
+    }
+
+    public void DrawGUI(RuntimeAgs args)
+    {
+        using (MySpriteDrawFrame frame = RenderingSurface.DrawFrame())
+        {
+            List<MySprite> renderableSprites = new List<MySprite>();
+            renderableSprites.AddRange(DrawRuntimeUI(new Vector2(0.5f, 0.5f), sweepAngle));
+            renderableSprites.AddRange(DrawFixedUI(new Vector2(0.5f, 0.5f)));
+
+            MatrixD viewMatrix = MatrixD.CreateWorld(args.ReferenceLocation, args.ReferenceForwards, args.ReferenceUpwards);
+            MatrixD viewInv = MatrixD.Invert(viewMatrix);
+
+            foreach (var item in args.ToDisplay)
+            {
+                Vector2 squareLocation, squarePointPos;
+                ProjectToPlane(viewInv, item.Location, item.Velocity, out squareLocation, out squarePointPos);
+                renderableSprites.Add(DrawRectangle_FromCntr(squareLocation, 0.025f, 0.025f, item.RenderColour, true));
+                renderableSprites.Add(DrawLine(squareLocation, squarePointPos, 0.005f, item.RenderColour));
+                renderableSprites.Add(DrawText(item.Velocity.Length().ToString("F1"), squareLocation + new Vector2(0.02f, -0.04f), item.RenderColour, 0.5f, TextAlignment.LEFT));
+            }
+
+            if (args.DrawReferenceMarker)
+            {
+                Vector2 sourceLocation, sourcePointPos;
+                ProjectToPlane(viewInv, args.ReferenceMarkerLocation, Vector3D.Zero, out sourceLocation, out sourcePointPos);
+                Vector2 radarCenter = new Vector2(0.5f, 0.5f) + new Vector2(0, -16) / 512.0f;
+                const float radarRadius = 200f / 512f;
+                Vector2 sourceOffset = sourceLocation - radarCenter;
+                float sourceDistanceSquared = sourceOffset.LengthSquared();
+
+                if (sourceDistanceSquared > radarRadius * radarRadius)
+                {
+                    if (sourceDistanceSquared > 0.000001f)
+                    {
+                        Vector2 sourceDirection = Vector2.Normalize(sourceOffset);
+                        Vector2 edgePoint = radarCenter + sourceDirection * (radarRadius - 0.01f);
+                        renderableSprites.Add(DrawLine(edgePoint, radarCenter, 0.0035f, Color.LimeGreen));
+                        renderableSprites.Add(DrawCircle(edgePoint, 0.009f, Color.LimeGreen, true));
+                    }
+                }
+                else
+                {
+                    renderableSprites.Add(DrawCircle(sourceLocation, 0.012f, Color.LimeGreen, true));
+                }
+            }
+
+            renderableSprites.AddRange(DrawDynamicUI(new Vector2(0.5f, 0.5f), args.MissileRemainingCount.ToString("D2"), args.Targetmode, args.Targetinfoline1, args.Targetinfoline2));
+            if (args.TargetLock) renderableSprites.AddRange(DrawTargetLockUI(new Vector2(0.5f, 0.5f)));
+
+            for (int i = 0; i < renderableSprites.Count; i++)
+            {
+                MySprite sprite = renderableSprites[i];
+                sprite.Position = sprite.Position * SurfaceScaleToScreenSpace + SurfOffsetToScreenSpace;
+                sprite.Size *= SurfaceScaleToScreenSpace;
+                if (sprite.Type == SpriteType.TEXT) sprite.RotationOrScale *= SurfaceScaleToScreenSpace.X;
+                renderableSprites[i] = sprite;
+            }
+
+            if (BullshitTimer > 20)
+            {
+                frame.Add(new MySprite());
+                BullshitTimer = 0;
+            }
+            BullshitTimer++;
+            frame.AddRange(renderableSprites);
+
+            sweepAngle += SweepSpeed;
+            if (sweepAngle >= Math.PI * 2) sweepAngle -= (float)(Math.PI * 2);
+        }
+    }
 }

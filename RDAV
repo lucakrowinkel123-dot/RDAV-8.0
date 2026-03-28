@@ -73,6 +73,8 @@
   int GuiRefreshCounter = 0;
   const int GuiRefreshIntervalTicks = 15; //redraw every other tick to reduce UI overhead
   const string ExternalTargetPacketHeader = "VTARGET";
+  const string MissileTelemetryPacketHeader = "VMISS";
+  const string MissileTelemetryChannel = "VETILE_RDAV_MISSILES";
   bool ExternalFeedActive = false;
   bool ExternalFeedHasTarget = false;
   Vector3D ExternalTargetPosition = Vector3D.Zero;
@@ -82,6 +84,8 @@
   Vector3D ExternalSourceUp = Vector3D.Up;
   string ExternalSourceName = "none";
   long ExternalTargetId = 0;
+  long ExternalFeedLastSeenTick = 0;
+  const long ExternalFeedTimeoutTicks = 180; //3 seconds at Update1
 
   //Shipside Required Blocks For Functionality
   RadarTrackingModule ThisTracker;
@@ -618,6 +622,7 @@
           public Vector3D ReferenceLocation;
           public Vector3D ReferenceForwards;
           public Vector3D ReferenceUpwards;
+          public Vector3D ReferenceMarkerLocation;
           public bool DrawReferenceMarker;
 
           public List<TargetInfo> ToDisplay;
@@ -662,8 +667,27 @@
               if (args.DrawReferenceMarker)
               {
                   Vector2 sourcelocation, sourcepointpos;
-                  ProjectToPlane(viewInv, args.ReferenceLocation, Vector3D.Zero, out sourcelocation, out sourcepointpos);
-                  renderableSprites.Add(DrawCircle(sourcelocation, 0.012f, Color.LimeGreen, true));
+                  ProjectToPlane(viewInv, args.ReferenceMarkerLocation, Vector3D.Zero, out sourcelocation, out sourcepointpos);
+                  Vector2 radarCenter = new Vector2(0.5f, 0.5f) + new Vector2(0, -16) / 512.0f;
+                  const float radarRadius = 200f / 512f;
+                  Vector2 sourceOffset = sourcelocation - radarCenter;
+                  float sourceDistanceSquared = sourceOffset.LengthSquared();
+                  float radarRadiusSquared = radarRadius * radarRadius;
+
+                  if (sourceDistanceSquared > radarRadiusSquared)
+                  {
+                      if (sourceDistanceSquared > 0.000001f)
+                      {
+                          Vector2 sourceDirection = Vector2.Normalize(sourceOffset);
+                          Vector2 edgePoint = radarCenter + sourceDirection * (radarRadius - 0.01f);
+                          renderableSprites.Add(DrawLine(edgePoint, radarCenter, 0.0035f, Color.LimeGreen));
+                          renderableSprites.Add(DrawCircle(edgePoint, 0.009f, Color.LimeGreen, true));
+                      }
+                  }
+                  else
+                  {
+                      renderableSprites.Add(DrawCircle(sourcelocation, 0.012f, Color.LimeGreen, true));
+                  }
               }
 
               //Renders Information GUI
@@ -1285,7 +1309,47 @@
       ExternalSourceUp = new Vector3D(sux, suy, suz);
       ExternalTargetId = parsedTargetId;
       ExternalSourceName = parts[13];
+      ExternalFeedLastSeenTick = Runtime.LifetimeTicks;
       return true;
+  }
+
+  void BroadcastMissileTelemetry()
+  {
+      if (IGC == null)
+      { return; }
+
+      StringBuilder packetBuilder = new StringBuilder();
+      packetBuilder.Append(MissileTelemetryPacketHeader).Append("|1|");
+      packetBuilder.Append(Me != null ? Me.CustomName : "RDAV").Append("|");
+
+      int count = 0;
+      const int MaxTelemetryMissiles = 12;
+      for (int i = 0; i < MISSILES.Count; i++)
+      {
+          var missile = MISSILES[i];
+          if (!missile.ReadyAndActive || !missile.ThrustersIgnited)
+          { continue; }
+          if (count >= MaxTelemetryMissiles)
+          { break; }
+          count++;
+      }
+
+      packetBuilder.Append(count);
+      int written = 0;
+      for (int i = 0; i < MISSILES.Count && written < count; i++)
+      {
+          var missile = MISSILES[i];
+          if (!missile.ReadyAndActive || !missile.ThrustersIgnited)
+          { continue; }
+
+          Vector3D pos = missile.WorldLocation;
+          Vector3D vel = missile.WorldVelocity * 30;
+          packetBuilder.Append("|").Append(pos.X.ToString("0.###")).Append("|").Append(pos.Y.ToString("0.###")).Append("|").Append(pos.Z.ToString("0.###"));
+          packetBuilder.Append("|").Append(vel.X.ToString("0.###")).Append("|").Append(vel.Y.ToString("0.###")).Append("|").Append(vel.Z.ToString("0.###"));
+          written++;
+      }
+
+      IGC.SendBroadcastMessage(MissileTelemetryChannel, packetBuilder.ToString(), TransmissionDistance.TransmissionDistanceMax);
   }
 
   //Main Method
@@ -1328,11 +1392,19 @@
       //Updates Tracking System
       ThisTracker.UpdateTracking(Runtime.LifetimeTicks); //DateTime.Now.Ticks
 
+      //Drops stale external feeds so old remote locks do not persist forever.
+      if (ExternalFeedActive && (Runtime.LifetimeTicks - ExternalFeedLastSeenTick) > ExternalFeedTimeoutTicks)
+      {
+          ExternalFeedActive = false;
+          ExternalFeedHasTarget = false;
+          ExternalSourceName = "stale";
+      }
+
       //Toggles LockOn
       bool HasTarget = ThisTracker.IsTracking; //If Turret Detects Enemy
 
       //Updates Track Location
-      if (ExternalFeedHasTarget)
+      if (ExternalFeedActive && ExternalFeedHasTarget)
       {
           HasTarget = true;
           TrackedTargetLocation = ExternalTargetPosition;
@@ -1412,6 +1484,7 @@
           runtimeAgs.ReferenceLocation = ExternalFeedActive ? ExternalSourcePosition : RC.GetPosition();
           runtimeAgs.ReferenceForwards = ExternalFeedActive && ExternalSourceForward.LengthSquared() > 0.001 ? Vector3D.Normalize(ExternalSourceForward) : RC.WorldMatrix.Forward;
           runtimeAgs.ReferenceUpwards = ExternalFeedActive && ExternalSourceUp.LengthSquared() > 0.001 ? Vector3D.Normalize(ExternalSourceUp) : RC.WorldMatrix.Up;
+          runtimeAgs.ReferenceMarkerLocation = ExternalFeedActive ? RC.GetPosition() : runtimeAgs.ReferenceLocation;
           runtimeAgs.DrawReferenceMarker = true;
           runtimeAgs.TargetLock = HasTarget;
           runtimeAgs.Targetmode = "RDAR";
@@ -1447,6 +1520,7 @@
           }
 
           GUIPanel.DrawGUI(runtimeAgs);
+          BroadcastMissileTelemetry();
       }
 
 
