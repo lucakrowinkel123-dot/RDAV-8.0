@@ -617,9 +617,6 @@ string GetProgrammableRuntimeDisplay(IMyProgrammableBlock pb)
     for (int i = 0; i < lines.Length; i++)
     {
         string line = lines[i];
-        if (line.IndexOf("runtime", StringComparison.OrdinalIgnoreCase) < 0 &&
-            line.IndexOf("run time", StringComparison.OrdinalIgnoreCase) < 0)
-            continue;
         if (line.IndexOf("ms", StringComparison.OrdinalIgnoreCase) < 0)
             continue;
 
