@@ -1238,18 +1238,7 @@
           ThisTracker = new RadarTrackingModule(flightBlock, combatBlock);
       }
 
-      //Collects LCD Fro Display
-      // Try to find an LCD panel with the tag
-      var lcds = new List<IMyTextPanel>();
-      GridTerminalSystem.GetBlocksOfType<IMyTextPanel>(lcds, a => a.CustomName.Contains(MissileTag) && (!OnlyUseBlocksOnSameConstruct || a.IsSameConstructAs(Me)));
-      if (lcds.Count>0)
-      {
-          GUIPanel = new TrackingDisplay(lcds[0]);
-      }
-      else if (RC!=null && RC is IMyCockpit)
-      {
-          GUIPanel = new TrackingDisplay((RC as IMyCockpit).GetSurface(MissileLCD));
-      }
+      //GUI display is now optional. RDAV can run headless and still provide missile telemetry to Vetile.
 
       //Collects Light/Alarm
       List<IMyTerminalBlock> TempCollection2 = new List<IMyTerminalBlock>();
@@ -1380,8 +1369,6 @@
       { Echo(" ~ No Ship Control Found,\nInstall Forward Facing Cockpit/RC/Flightseat And Press Recompile"); RC = null; return; }
       if (ThisTracker == null)
       { Echo("No Target Tracking System Found\n> Make sure a combat AI block and flight AI block are installed and both have '#A#' in the name\n> Then press Recompile."); return; }
-      if (GUIPanel == null)
-      { Echo("No GUI Display Found\n> Install an LCD or cockpit screen with name containing the MissileTag \n> Then press Recompile."); return; }
       if (Alarm == null || Alarm.CubeGrid.GetCubeBlock(Alarm.Position) == null)
       { Echo(" ~ No Target Indicator Light Found,\nInstall Light Block With Missile Tag In Name And Press Recompile\n (script will work fine without) "); Alarm = null; }
       Lstrundata = "All Systems Active\nAwaiting Target";
@@ -1480,46 +1467,49 @@
       {
           GuiRefreshCounter = 0;
 
-          TrackingDisplay.RuntimeAgs runtimeAgs = new TrackingDisplay.RuntimeAgs();
-          runtimeAgs.ReferenceLocation = ExternalFeedActive ? ExternalSourcePosition : RC.GetPosition();
-          runtimeAgs.ReferenceForwards = ExternalFeedActive && ExternalSourceForward.LengthSquared() > 0.001 ? Vector3D.Normalize(ExternalSourceForward) : RC.WorldMatrix.Forward;
-          runtimeAgs.ReferenceUpwards = ExternalFeedActive && ExternalSourceUp.LengthSquared() > 0.001 ? Vector3D.Normalize(ExternalSourceUp) : RC.WorldMatrix.Up;
-          runtimeAgs.ReferenceMarkerLocation = ExternalFeedActive ? RC.GetPosition() : runtimeAgs.ReferenceLocation;
-          runtimeAgs.DrawReferenceMarker = true;
-          runtimeAgs.TargetLock = HasTarget;
-          runtimeAgs.Targetmode = "RDAR";
-          runtimeAgs.Targetinfoline1 = ThisTracker.GetLine1Info();
-          runtimeAgs.Targetinfoline2 = ThisTracker.GetLine2Info();
-          runtimeAgs.MissileRemainingCount = MissileRemainingCount;
-          runtimeAgs.ToDisplay = new List<TrackingDisplay.TargetInfo>();
-          runtimeAgs.BoostMode = ThisTracker.BoostMode;
-
-          //Adds All active Missiles
-          foreach (var missile in MISSILES)
+          if (GUIPanel != null)
           {
-              if (missile.ReadyAndActive && missile.ThrustersIgnited)
+              TrackingDisplay.RuntimeAgs runtimeAgs = new TrackingDisplay.RuntimeAgs();
+              runtimeAgs.ReferenceLocation = ExternalFeedActive ? ExternalSourcePosition : RC.GetPosition();
+              runtimeAgs.ReferenceForwards = ExternalFeedActive && ExternalSourceForward.LengthSquared() > 0.001 ? Vector3D.Normalize(ExternalSourceForward) : RC.WorldMatrix.Forward;
+              runtimeAgs.ReferenceUpwards = ExternalFeedActive && ExternalSourceUp.LengthSquared() > 0.001 ? Vector3D.Normalize(ExternalSourceUp) : RC.WorldMatrix.Up;
+              runtimeAgs.ReferenceMarkerLocation = ExternalFeedActive ? RC.GetPosition() : runtimeAgs.ReferenceLocation;
+              runtimeAgs.DrawReferenceMarker = true;
+              runtimeAgs.TargetLock = HasTarget;
+              runtimeAgs.Targetmode = "RDAR";
+              runtimeAgs.Targetinfoline1 = ThisTracker.GetLine1Info();
+              runtimeAgs.Targetinfoline2 = ThisTracker.GetLine2Info();
+              runtimeAgs.MissileRemainingCount = MissileRemainingCount;
+              runtimeAgs.ToDisplay = new List<TrackingDisplay.TargetInfo>();
+              runtimeAgs.BoostMode = ThisTracker.BoostMode;
+
+              //Adds All active Missiles
+              foreach (var missile in MISSILES)
+              {
+                  if (missile.ReadyAndActive && missile.ThrustersIgnited)
+                  {
+                      TrackingDisplay.TargetInfo targetInfo = new TrackingDisplay.TargetInfo();
+                      targetInfo.RenderColour = Color.RoyalBlue;
+                      targetInfo.Location = missile.WorldLocation;
+                      targetInfo.Velocity = missile.WorldVelocity * 30;
+
+                      runtimeAgs.ToDisplay.Add(targetInfo);
+                  }
+              }
+
+              //Adds Target (If Tracking)
+              if (HasTarget)
               {
                   TrackingDisplay.TargetInfo targetInfo = new TrackingDisplay.TargetInfo();
-                  targetInfo.RenderColour = Color.RoyalBlue;
-                  targetInfo.Location = missile.WorldLocation;
-                  targetInfo.Velocity = missile.WorldVelocity * 30;
+                  targetInfo.RenderColour = Color.Red;
+                  targetInfo.Location = TrackedTargetLocation;
+                  targetInfo.Velocity = TrackedTargetVelocity * 30;
 
                   runtimeAgs.ToDisplay.Add(targetInfo);
               }
+
+              GUIPanel.DrawGUI(runtimeAgs);
           }
-
-          //Adds Target (If Tracking)
-          if (HasTarget)
-          {
-              TrackingDisplay.TargetInfo targetInfo = new TrackingDisplay.TargetInfo();
-              targetInfo.RenderColour = Color.Red;
-              targetInfo.Location = TrackedTargetLocation;
-              targetInfo.Velocity = TrackedTargetVelocity * 30;
-
-              runtimeAgs.ToDisplay.Add(targetInfo);
-          }
-
-          GUIPanel.DrawGUI(runtimeAgs);
           BroadcastMissileTelemetry();
       }
 

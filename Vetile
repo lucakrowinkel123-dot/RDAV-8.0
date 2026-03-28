@@ -593,6 +593,7 @@ void UpdateRadarLcd()
     runtimeAgs.ToDisplay = new List<VetileRadarDisplay.TargetInfo>();
     runtimeAgs.Markers = new List<VetileRadarDisplay.MarkerInfo>();
     runtimeAgs.BoostMode = false;
+    runtimeAgs.ProjectionRotationDegrees = targetSourceMode == TargetSourceMode.Remote ? 180f : 270f;
 
     // Radar origin/frame should be the currently selected source.
     if (activeTargetPacket.SourceForward.LengthSquared() > 0.001)
@@ -1619,7 +1620,8 @@ public class VetileRadarDisplay
     const string SquareHollow = "SquareHollow";
     const string CircleHollow = "CircleHollow";
     const string Circle = "Circle";
-    const float RadarRotationDegrees = 270f; //orientation correction
+    const float DefaultRadarRotationDegrees = 270f; //orientation correction
+    float CurrentProjectionRotationDegrees = DefaultRadarRotationDegrees;
 
     public VetileRadarDisplay(IMyTextSurface textSurface)
     {
@@ -1740,13 +1742,13 @@ public class VetileRadarDisplay
         Vector2 radarCenter = new Vector2(0.5f, 0.5f) + new Vector2(0, -16) / 512.0f;
         Vector3D localPos = Vector3D.Transform(location, worldToLocal);
         Vector2 localFlat = new Vector2((float)localPos.X, (float)localPos.Z);
-        localFlat = RotateVectorDegrees(localFlat, RadarRotationDegrees);
+        localFlat = RotateVectorDegrees(localFlat, CurrentProjectionRotationDegrees);
         locationScreenspace = radarCenter + localFlat * screenUnitsPerMeter;
 
         Vector3D localVelocity = Vector3D.TransformNormal(velocity, worldToLocal);
         if (localVelocity.LengthSquared() > 0) localVelocity = Vector3D.Normalize(localVelocity);
         Vector2 velFlat = new Vector2((float)localVelocity.X, (float)localVelocity.Z);
-        velFlat = RotateVectorDegrees(velFlat, RadarRotationDegrees);
+        velFlat = RotateVectorDegrees(velFlat, CurrentProjectionRotationDegrees);
         velocityIndicator = locationScreenspace + velFlat * 0.05f;
     }
 
@@ -1789,6 +1791,7 @@ public class VetileRadarDisplay
         public int MissileRemainingCount;
         public bool TargetLock;
         public bool BoostMode;
+        public float ProjectionRotationDegrees;
     }
 
     public struct MarkerInfo
@@ -1802,6 +1805,10 @@ public class VetileRadarDisplay
     {
         using (MySpriteDrawFrame frame = RenderingSurface.DrawFrame())
         {
+            CurrentProjectionRotationDegrees = Math.Abs(args.ProjectionRotationDegrees) > 0.001f
+                ? args.ProjectionRotationDegrees
+                : DefaultRadarRotationDegrees;
+
             List<MySprite> renderableSprites = new List<MySprite>();
             renderableSprites.AddRange(DrawRuntimeUI(new Vector2(0.5f, 0.5f), sweepAngle));
             renderableSprites.AddRange(DrawFixedUI(new Vector2(0.5f, 0.5f)));
