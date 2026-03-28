@@ -590,7 +590,37 @@ void UpdateRadarLcd()
     runtimeAgs.Targetinfoline2 = activeTargetPacket.HasTarget ? ("ID: " + activeTargetPacket.TargetId) : RDAV_STATUS_NONE;
     runtimeAgs.MissileRemainingCount = CountActiveMissileTelemetry();
     runtimeAgs.ToDisplay = new List<VetileRadarDisplay.TargetInfo>();
+    runtimeAgs.Markers = new List<VetileRadarDisplay.MarkerInfo>();
     runtimeAgs.BoostMode = false;
+
+    // Radar origin/frame should be the currently selected source.
+    if (activeTargetPacket.SourceForward.LengthSquared() > 0.001)
+        runtimeAgs.ReferenceForwards = Vector3D.Normalize(activeTargetPacket.SourceForward);
+    if (activeTargetPacket.SourceUp.LengthSquared() > 0.001)
+        runtimeAgs.ReferenceUpwards = Vector3D.Normalize(activeTargetPacket.SourceUp);
+    runtimeAgs.ReferenceLocation = activeTargetPacket.SourcePosition;
+
+    // Rover marker (green), no tag text requested.
+    VetileRadarDisplay.MarkerInfo roverMarker = new VetileRadarDisplay.MarkerInfo();
+    roverMarker.Location = origin;
+    roverMarker.Color = Color.LimeGreen;
+    roverMarker.Label = "";
+    runtimeAgs.Markers.Add(roverMarker);
+
+    // Other remote source markers (beige) with source-id labels.
+    foreach (var kv in remoteSources)
+    {
+        if ((elapsedSeconds - kv.Value.LastReceivedAt) > REMOTE_TARGET_STALE_SECONDS)
+            continue;
+        if (string.Equals(kv.Key, activeTargetPacket.SourceName, StringComparison.OrdinalIgnoreCase))
+            continue;
+
+        VetileRadarDisplay.MarkerInfo remoteMarker = new VetileRadarDisplay.MarkerInfo();
+        remoteMarker.Location = kv.Value.LastPacket.SourcePosition;
+        remoteMarker.Color = new Color(245, 245, 220);
+        remoteMarker.Label = kv.Key;
+        runtimeAgs.Markers.Add(remoteMarker);
+    }
 
     foreach (var kv in rdavMissileFeeds)
     {
@@ -1751,12 +1781,20 @@ public class VetileRadarDisplay
         public Color ReferenceMarkerColor;
         public string ReferenceMarkerLabel;
         public List<TargetInfo> ToDisplay;
+        public List<MarkerInfo> Markers;
         public string Targetmode;
         public string Targetinfoline1;
         public string Targetinfoline2;
         public int MissileRemainingCount;
         public bool TargetLock;
         public bool BoostMode;
+    }
+
+    public struct MarkerInfo
+    {
+        public Vector3D Location;
+        public Color Color;
+        public string Label;
     }
 
     public void DrawGUI(RuntimeAgs args)
@@ -1781,31 +1819,45 @@ public class VetileRadarDisplay
 
             if (args.DrawReferenceMarker)
             {
-                Vector2 sourceLocation, sourcePointPos;
-                ProjectToPlane(viewInv, args.ReferenceMarkerLocation, Vector3D.Zero, out sourceLocation, out sourcePointPos);
+                List<MarkerInfo> markers = args.Markers ?? new List<MarkerInfo>();
+
+                // Optional source marker from existing field (kept for backward compatibility).
+                MarkerInfo sourceMarker = new MarkerInfo();
+                sourceMarker.Location = args.ReferenceMarkerLocation;
+                sourceMarker.Color = args.ReferenceMarkerColor.A == 0 ? Color.LimeGreen : args.ReferenceMarkerColor;
+                sourceMarker.Label = string.IsNullOrWhiteSpace(args.ReferenceMarkerLabel) ? "" : args.ReferenceMarkerLabel;
+                markers.Add(sourceMarker);
+
                 Vector2 radarCenter = new Vector2(0.5f, 0.5f) + new Vector2(0, -16) / 512.0f;
                 const float radarRadius = 200f / 512f;
-                Vector2 sourceOffset = sourceLocation - radarCenter;
-                float sourceDistanceSquared = sourceOffset.LengthSquared();
-                Color markerColor = args.ReferenceMarkerColor;
-                if (markerColor.A == 0) markerColor = Color.LimeGreen;
-                string markerLabel = string.IsNullOrWhiteSpace(args.ReferenceMarkerLabel) ? "SCOUT" : args.ReferenceMarkerLabel;
 
-                if (sourceDistanceSquared > radarRadius * radarRadius)
+                for (int i = 0; i < markers.Count; i++)
                 {
-                    if (sourceDistanceSquared > 0.000001f)
+                    Vector2 markerLocation, markerPointPos;
+                    ProjectToPlane(viewInv, markers[i].Location, Vector3D.Zero, out markerLocation, out markerPointPos);
+                    Vector2 markerOffset = markerLocation - radarCenter;
+                    float markerDistanceSquared = markerOffset.LengthSquared();
+                    Color markerColor = markers[i].Color.A == 0 ? Color.LimeGreen : markers[i].Color;
+                    string markerLabel = markers[i].Label ?? "";
+
+                    if (markerDistanceSquared > radarRadius * radarRadius)
                     {
-                        Vector2 sourceDirection = Vector2.Normalize(sourceOffset);
-                        Vector2 edgePoint = radarCenter + sourceDirection * (radarRadius - 0.01f);
-                        renderableSprites.Add(DrawLine(edgePoint, radarCenter, 0.0035f, markerColor));
-                        renderableSprites.Add(DrawCircle(edgePoint, 0.009f, markerColor, true));
-                        renderableSprites.Add(DrawText(markerLabel, edgePoint + new Vector2(0.014f, -0.012f), markerColor, 0.45f, TextAlignment.LEFT));
+                        if (markerDistanceSquared > 0.000001f)
+                        {
+                            Vector2 markerDirection = Vector2.Normalize(markerOffset);
+                            Vector2 edgePoint = radarCenter + markerDirection * (radarRadius - 0.01f);
+                            renderableSprites.Add(DrawLine(edgePoint, radarCenter, 0.0035f, markerColor));
+                            renderableSprites.Add(DrawCircle(edgePoint, 0.009f, markerColor, true));
+                            if (!string.IsNullOrWhiteSpace(markerLabel))
+                                renderableSprites.Add(DrawText(markerLabel, edgePoint + new Vector2(0.014f, -0.012f), markerColor, 0.45f, TextAlignment.LEFT));
+                        }
                     }
-                }
-                else
-                {
-                    renderableSprites.Add(DrawCircle(sourceLocation, 0.012f, markerColor, true));
-                    renderableSprites.Add(DrawText(markerLabel, sourceLocation + new Vector2(0.014f, -0.012f), markerColor, 0.45f, TextAlignment.LEFT));
+                    else
+                    {
+                        renderableSprites.Add(DrawCircle(markerLocation, 0.012f, markerColor, true));
+                        if (!string.IsNullOrWhiteSpace(markerLabel))
+                            renderableSprites.Add(DrawText(markerLabel, markerLocation + new Vector2(0.014f, -0.012f), markerColor, 0.45f, TextAlignment.LEFT));
+                    }
                 }
             }
 
