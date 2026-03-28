@@ -82,6 +82,8 @@
   Vector3D ExternalSourceUp = Vector3D.Up;
   string ExternalSourceName = "none";
   long ExternalTargetId = 0;
+  long ExternalFeedLastSeenTick = 0;
+  const long ExternalFeedTimeoutTicks = 180; //3 seconds at Update1
 
   //Shipside Required Blocks For Functionality
   RadarTrackingModule ThisTracker;
@@ -618,6 +620,7 @@
           public Vector3D ReferenceLocation;
           public Vector3D ReferenceForwards;
           public Vector3D ReferenceUpwards;
+          public Vector3D ReferenceMarkerLocation;
           public bool DrawReferenceMarker;
 
           public List<TargetInfo> ToDisplay;
@@ -662,7 +665,7 @@
               if (args.DrawReferenceMarker)
               {
                   Vector2 sourcelocation, sourcepointpos;
-                  ProjectToPlane(viewInv, args.ReferenceLocation, Vector3D.Zero, out sourcelocation, out sourcepointpos);
+                  ProjectToPlane(viewInv, args.ReferenceMarkerLocation, Vector3D.Zero, out sourcelocation, out sourcepointpos);
                   renderableSprites.Add(DrawCircle(sourcelocation, 0.012f, Color.LimeGreen, true));
               }
 
@@ -1285,6 +1288,7 @@
       ExternalSourceUp = new Vector3D(sux, suy, suz);
       ExternalTargetId = parsedTargetId;
       ExternalSourceName = parts[13];
+      ExternalFeedLastSeenTick = Runtime.LifetimeTicks;
       return true;
   }
 
@@ -1328,11 +1332,19 @@
       //Updates Tracking System
       ThisTracker.UpdateTracking(Runtime.LifetimeTicks); //DateTime.Now.Ticks
 
+      //Drops stale external feeds so old remote locks do not persist forever.
+      if (ExternalFeedActive && (Runtime.LifetimeTicks - ExternalFeedLastSeenTick) > ExternalFeedTimeoutTicks)
+      {
+          ExternalFeedActive = false;
+          ExternalFeedHasTarget = false;
+          ExternalSourceName = "stale";
+      }
+
       //Toggles LockOn
       bool HasTarget = ThisTracker.IsTracking; //If Turret Detects Enemy
 
       //Updates Track Location
-      if (ExternalFeedHasTarget)
+      if (ExternalFeedActive && ExternalFeedHasTarget)
       {
           HasTarget = true;
           TrackedTargetLocation = ExternalTargetPosition;
@@ -1412,6 +1424,7 @@
           runtimeAgs.ReferenceLocation = ExternalFeedActive ? ExternalSourcePosition : RC.GetPosition();
           runtimeAgs.ReferenceForwards = ExternalFeedActive && ExternalSourceForward.LengthSquared() > 0.001 ? Vector3D.Normalize(ExternalSourceForward) : RC.WorldMatrix.Forward;
           runtimeAgs.ReferenceUpwards = ExternalFeedActive && ExternalSourceUp.LengthSquared() > 0.001 ? Vector3D.Normalize(ExternalSourceUp) : RC.WorldMatrix.Up;
+          runtimeAgs.ReferenceMarkerLocation = ExternalFeedActive ? RC.GetPosition() : runtimeAgs.ReferenceLocation;
           runtimeAgs.DrawReferenceMarker = true;
           runtimeAgs.TargetLock = HasTarget;
           runtimeAgs.Targetmode = "RDAR";

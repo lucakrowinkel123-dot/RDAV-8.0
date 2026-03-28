@@ -7,6 +7,8 @@ const string CHANNEL = "VETILE_SCOUT_TARGET";
 const string CONTROL_CHANNEL = "VETILE_SCOUT_CONTROL";
 const string PACKET_HEADER = "VTARGET";
 const string PACKET_VERSION = "1";
+const string SOURCE_ID_KEY = "SourceId";
+const string CALLSIGN_KEY = "Callsign";
 const double SEND_INTERVAL_SECONDS = 0.1;
 const int FORCE_CONFIG_EVERY_N_SENDS = 10;
 
@@ -41,11 +43,25 @@ enum TargetSubsystemMode
 public Program()
 {
     Runtime.UpdateFrequency = UpdateFrequency.Update10;
+    EnsureCustomDataTemplate();
     LoadBlocks();
     RegisterControlListener();
 }
 
 public void Save() { }
+
+void EnsureCustomDataTemplate()
+{
+    if (!string.IsNullOrWhiteSpace(Me.CustomData))
+        return;
+
+    Me.CustomData =
+@"# Vetile Scout Relay settings
+# Optional: set a human-friendly source name shown on RDAV/Vetile
+SourceId=Scout-1
+# Legacy alias still supported:
+# Callsign=Scout-1";
+}
 
 public void Main(string argument, UpdateType updateSource)
 {
@@ -259,16 +275,30 @@ string BuildPacket()
 
 string GetCallsign()
 {
+    string sourceId = GetCustomDataValue(SOURCE_ID_KEY);
+    if (!string.IsNullOrWhiteSpace(sourceId))
+        return sourceId;
+
+    string callsign = GetCustomDataValue(CALLSIGN_KEY);
+    if (!string.IsNullOrWhiteSpace(callsign))
+        return callsign;
+
+    return Me.CustomName;
+}
+
+string GetCustomDataValue(string key)
+{
     string data = Me.CustomData ?? "";
     string[] lines = data.Split('\n');
+    string prefix = key + "=";
     for (int i = 0; i < lines.Length; i++)
     {
         var line = lines[i].Trim();
-        if (line.StartsWith("Callsign=", StringComparison.OrdinalIgnoreCase))
-            return line.Substring("Callsign=".Length).Trim();
+        if (line.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            return line.Substring(prefix.Length).Trim();
     }
 
-    return Me.CustomName;
+    return "";
 }
 
 void EchoStatus(string packet)
