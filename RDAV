@@ -73,6 +73,8 @@
   int GuiRefreshCounter = 0;
   const int GuiRefreshIntervalTicks = 15; //redraw every other tick to reduce UI overhead
   const string ExternalTargetPacketHeader = "VTARGET";
+  const string MissileTelemetryPacketHeader = "VMISS";
+  const string MissileTelemetryChannel = "VETILE_RDAV_MISSILES";
   bool ExternalFeedActive = false;
   bool ExternalFeedHasTarget = false;
   Vector3D ExternalTargetPosition = Vector3D.Zero;
@@ -1311,6 +1313,45 @@
       return true;
   }
 
+  void BroadcastMissileTelemetry()
+  {
+      if (IGC == null)
+      { return; }
+
+      StringBuilder packetBuilder = new StringBuilder();
+      packetBuilder.Append(MissileTelemetryPacketHeader).Append("|1|");
+      packetBuilder.Append(Me != null ? Me.CustomName : "RDAV").Append("|");
+
+      int count = 0;
+      const int MaxTelemetryMissiles = 12;
+      for (int i = 0; i < MISSILES.Count; i++)
+      {
+          var missile = MISSILES[i];
+          if (!missile.ReadyAndActive || !missile.ThrustersIgnited)
+          { continue; }
+          if (count >= MaxTelemetryMissiles)
+          { break; }
+          count++;
+      }
+
+      packetBuilder.Append(count);
+      int written = 0;
+      for (int i = 0; i < MISSILES.Count && written < count; i++)
+      {
+          var missile = MISSILES[i];
+          if (!missile.ReadyAndActive || !missile.ThrustersIgnited)
+          { continue; }
+
+          Vector3D pos = missile.WorldLocation;
+          Vector3D vel = missile.WorldVelocity * 30;
+          packetBuilder.Append("|").Append(pos.X.ToString("0.###")).Append("|").Append(pos.Y.ToString("0.###")).Append("|").Append(pos.Z.ToString("0.###"));
+          packetBuilder.Append("|").Append(vel.X.ToString("0.###")).Append("|").Append(vel.Y.ToString("0.###")).Append("|").Append(vel.Z.ToString("0.###"));
+          written++;
+      }
+
+      IGC.SendBroadcastMessage(MissileTelemetryChannel, packetBuilder.ToString(), TransmissionDistance.TransmissionDistanceMax);
+  }
+
   //Main Method
   #region Main Method
   void Main(string argument)
@@ -1479,6 +1520,7 @@
           }
 
           GUIPanel.DrawGUI(runtimeAgs);
+          BroadcastMissileTelemetry();
       }
 
 
