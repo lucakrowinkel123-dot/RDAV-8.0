@@ -525,6 +525,15 @@ void LoadNavController()
 {
     var controllers = new List<IMyShipController>();
     GridTerminalSystem.GetBlocksOfType(controllers, b => b.CustomName != null && b.CustomName.IndexOf(SUMMARY_LCD_TAG, StringComparison.OrdinalIgnoreCase) >= 0);
+    if (controllers.Count > 0)
+    {
+        navController = controllers[0];
+        return;
+    }
+
+    // Fallback: if no tagged controller, use any available ship controller so gravity frame can still work.
+    controllers.Clear();
+    GridTerminalSystem.GetBlocksOfType(controllers);
     navController = controllers.Count > 0 ? controllers[0] : null;
 }
 
@@ -548,9 +557,9 @@ void UpdateSummaryLcd()
     summaryLcd.ContentType = VRage.Game.GUI.TextPanel.ContentType.TEXT_AND_IMAGE;
 
     var text = new StringBuilder();
+    text.AppendLine($"Runtime: {Runtime.LastRunTimeMs:0.000} ms");
     text.AppendLine($"Target Priority: {globalTargetMode}");
     text.AppendLine($"Target System: {globalTargetSubsystemMode}");
-    text.AppendLine($"Target ID: {(activeTargetPacket.HasTarget ? activeTargetPacket.TargetId.ToString() : RDAV_STATUS_NONE)}");
     text.AppendLine();
 
     for (int i = 0; i < TAGS.Length; i++)
@@ -560,7 +569,7 @@ void UpdateSummaryLcd()
         string state = GetDisplayState(ch);
 
         text.AppendLine(ch.Tag);
-        text.AppendLine($"state: {state}");
+        text.AppendLine($"state: {state} | rt: {Runtime.LastRunTimeMs:0.000} ms");
         text.AppendLine($"Remaining: {remaining}");
         text.AppendLine();
     }
@@ -1627,6 +1636,8 @@ void EchoSummary()
     Echo($"Target feed: {targetSourceMode} | source={activeTargetPacket.SourceName} | id={(activeTargetPacket.HasTarget ? activeTargetPacket.TargetId.ToString() : RDAV_STATUS_NONE)} | dist={(activeTargetDistanceMeters >= 0 ? activeTargetDistanceMeters.ToString("0") + "m" : "-")}");
     Echo($"Target profile: Priority={globalTargetMode} | System={globalTargetSubsystemMode}");
     Echo($"Radar: {(configuredRadarAlignWithGravity ? "gravity" : "source")} | range={configuredRadarRangeKm:0.#}km");
+    if (configuredRadarAlignWithGravity && navController == null)
+        Echo("Radar gravity mode requested, but no ship controller found.");
     Echo($"Remote selection: {(remoteSourceOrder.Count > 0 ? GetSelectedRemoteNameOrDefault() : "none")} ({remoteSourceOrder.Count} known)");
 
     for (int i = 0; i < TAGS.Length; i++)

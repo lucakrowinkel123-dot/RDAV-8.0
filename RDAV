@@ -1426,6 +1426,11 @@
       //Turns Indiator Light On/Off
       if (Alarm != null)
       {
+          Alarm.Enabled = true;
+          Alarm.BlinkIntervalSeconds = 0;
+          Alarm.BlinkLength = 0;
+          Alarm.BlinkOffset = 0;
+          Alarm.Intensity = 5f;
           if (HasTarget)
           {
               Alarm.Color = Color.Red;
