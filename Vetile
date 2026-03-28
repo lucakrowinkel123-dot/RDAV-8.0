@@ -567,14 +567,51 @@ void UpdateSummaryLcd()
         var ch = channels[TAGS[i]];
         int remaining = ch.Projector != null ? ch.Projector.RemainingBlocks + ch.Projector.RemainingArmorBlocks : -1;
         string state = GetDisplayState(ch);
+        string scriptRuntime = GetProgrammableRuntimeDisplay(ch.FireTargetPb);
 
         text.AppendLine(ch.Tag);
-        text.AppendLine($"state: {state} | rt: {Runtime.LastRunTimeMs:0.000} ms");
+        text.AppendLine($"state: {state} | rt: {scriptRuntime}");
         text.AppendLine($"Remaining: {remaining}");
         text.AppendLine();
     }
 
     summaryLcd.WriteText(text.ToString(), false);
+}
+
+string GetProgrammableRuntimeDisplay(IMyProgrammableBlock pb)
+{
+    if (pb == null)
+        return "-";
+
+    string info = pb.DetailedInfo ?? "";
+    if (string.IsNullOrWhiteSpace(info))
+        return "-";
+
+    // Tries to read numbers from lines that contain runtime + milliseconds in DetailedInfo.
+    var lines = info.Split('\n');
+    for (int i = 0; i < lines.Length; i++)
+    {
+        string line = lines[i];
+        if (line.IndexOf("runtime", StringComparison.OrdinalIgnoreCase) < 0 &&
+            line.IndexOf("run time", StringComparison.OrdinalIgnoreCase) < 0)
+            continue;
+        if (line.IndexOf("ms", StringComparison.OrdinalIgnoreCase) < 0)
+            continue;
+
+        string numeric = "";
+        for (int j = 0; j < line.Length; j++)
+        {
+            char c = line[j];
+            if ((c >= '0' && c <= '9') || c == '.' || c == ',')
+                numeric += c == ',' ? "." : c.ToString();
+        }
+
+        double parsedMs;
+        if (double.TryParse(numeric, out parsedMs))
+            return parsedMs.ToString("0.000") + " ms";
+    }
+
+    return "-";
 }
 
 void UpdateRadarLcd()
