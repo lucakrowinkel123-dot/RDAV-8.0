@@ -739,15 +739,7 @@ void UpdateRadarLcd()
         var feed = kv.Value;
         if ((elapsedSeconds - feed.LastReceivedAt) > RDAV_MISSILE_STALE_SECONDS)
             continue;
-
-        for (int i = 0; i < feed.Missiles.Count; i++)
-        {
-            VetileRadarDisplay.TargetInfo missileInfo = new VetileRadarDisplay.TargetInfo();
-            missileInfo.RenderColour = Color.RoyalBlue;
-            missileInfo.Location = feed.Missiles[i].Position;
-            missileInfo.Velocity = feed.Missiles[i].Velocity;
-            runtimeAgs.ToDisplay.Add(missileInfo);
-        }
+        AddClusteredMissilesToDisplay(runtimeAgs.ToDisplay, feed.Missiles, runtimeAgs.RadarRangeMeters);
     }
 
     if (activeTargetPacket.HasTarget)
@@ -772,6 +764,46 @@ int CountActiveMissileTelemetry()
         count += kv.Value.Missiles.Count;
     }
     return count;
+}
+
+void AddClusteredMissilesToDisplay(List<VetileRadarDisplay.TargetInfo> output, List<MissilePoint> missiles, double radarRangeMeters)
+{
+    if (missiles == null || missiles.Count == 0)
+        return;
+
+    double clusterDistance = Math.Max(8.0, radarRangeMeters * 0.015); //cluster near-overlapping contacts
+    double clusterDistanceSq = clusterDistance * clusterDistance;
+    bool[] used = new bool[missiles.Count];
+
+    for (int i = 0; i < missiles.Count; i++)
+    {
+        if (used[i])
+            continue;
+
+        Vector3D posSum = missiles[i].Position;
+        Vector3D velSum = missiles[i].Velocity;
+        int count = 1;
+        used[i] = true;
+
+        for (int j = i + 1; j < missiles.Count; j++)
+        {
+            if (used[j])
+                continue;
+            if (Vector3D.DistanceSquared(missiles[i].Position, missiles[j].Position) > clusterDistanceSq)
+                continue;
+
+            used[j] = true;
+            posSum += missiles[j].Position;
+            velSum += missiles[j].Velocity;
+            count++;
+        }
+
+        VetileRadarDisplay.TargetInfo missileInfo = new VetileRadarDisplay.TargetInfo();
+        missileInfo.RenderColour = Color.RoyalBlue;
+        missileInfo.Location = posSum / count;
+        missileInfo.Velocity = velSum / count;
+        output.Add(missileInfo);
+    }
 }
 
 void AutoDetonateOutOfRangeWarheadsNextTag()
