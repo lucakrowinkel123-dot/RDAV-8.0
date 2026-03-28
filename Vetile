@@ -608,16 +608,16 @@ void UpdateRadarLcd()
         runtimeAgs.ReferenceUpwards = Vector3D.Normalize(activeTargetPacket.SourceUp);
     runtimeAgs.ReferenceLocation = activeTargetPacket.SourcePosition;
 
-    // Optional gravity alignment (uses this grid/controller gravity frame instead of source frame).
+    // Optional gravity alignment (uses world gravity-up + world north projection, independent of scout/source yaw).
     if (configuredRadarAlignWithGravity && navController != null)
     {
         Vector3D gravity = navController.GetNaturalGravity();
         if (gravity.LengthSquared() > 0.0001)
         {
             Vector3D upFromGravity = -Vector3D.Normalize(gravity);
-            Vector3D forwardProjected = Vector3D.Reject(navController.WorldMatrix.Forward, upFromGravity);
+            Vector3D forwardProjected = Vector3D.Reject(Vector3D.Forward, upFromGravity); // compass-north-like reference
             if (forwardProjected.LengthSquared() < 0.0001)
-                forwardProjected = Vector3D.Reject(navController.WorldMatrix.Right, upFromGravity);
+                forwardProjected = Vector3D.Reject(Vector3D.Right, upFromGravity);
             if (forwardProjected.LengthSquared() > 0.0001)
                 runtimeAgs.ReferenceForwards = Vector3D.Normalize(forwardProjected);
             runtimeAgs.ReferenceUpwards = upFromGravity;
@@ -1391,8 +1391,11 @@ void LoadConfig()
         parsedRangeKm = 2.5;
     configuredRadarRangeKm = Math.Max(0.1, parsedRangeKm);
 
-    string radarFrameRaw = GetCustomDataValue(RADAR_FRAME_KEY, "source");
-    configuredRadarAlignWithGravity = radarFrameRaw.Equals("gravity", StringComparison.OrdinalIgnoreCase);
+    string radarFrameRaw = GetCustomDataValue(RADAR_FRAME_KEY, "source").Trim();
+    configuredRadarAlignWithGravity =
+        radarFrameRaw.Equals("gravity", StringComparison.OrdinalIgnoreCase) ||
+        radarFrameRaw.Equals("grav", StringComparison.OrdinalIgnoreCase) ||
+        radarFrameRaw.Equals("g", StringComparison.OrdinalIgnoreCase);
 }
 
 string GetLocalSourceId()
@@ -1625,6 +1628,7 @@ void EchoSummary()
     Echo("Rotor Projection Finisher (Multi-Tag)");
     Echo($"Target feed: {targetSourceMode} | source={activeTargetPacket.SourceName} | id={(activeTargetPacket.HasTarget ? activeTargetPacket.TargetId.ToString() : RDAV_STATUS_NONE)} | dist={(activeTargetDistanceMeters >= 0 ? activeTargetDistanceMeters.ToString("0") + "m" : "-")}");
     Echo($"Target profile: Priority={globalTargetMode} | System={globalTargetSubsystemMode}");
+    Echo($"Radar: {(configuredRadarAlignWithGravity ? "gravity" : "source")} | range={configuredRadarRangeKm:0.#}km");
     Echo($"Remote selection: {(remoteSourceOrder.Count > 0 ? GetSelectedRemoteNameOrDefault() : "none")} ({remoteSourceOrder.Count} known)");
 
     for (int i = 0; i < TAGS.Length; i++)
