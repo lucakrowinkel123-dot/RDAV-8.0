@@ -35,6 +35,8 @@ const double REMOTE_TARGET_STALE_SECONDS = 2.0;
 const double RDAV_MISSILE_STALE_SECONDS = 2.0;
 const string RDAV_STATUS_NONE = "NO_TARGET";
 const string SOURCE_ID_KEY = "SourceId";
+const string RADAR_RANGE_KM_KEY = "RadarRangeKm";
+const string RADAR_FRAME_KEY = "RadarFrame";
 
 enum ControllerState
 {
@@ -150,6 +152,8 @@ int selectedRemoteIndex;
 TargetPacket activeTargetPacket;
 double activeTargetDistanceMeters = -1;
 string configuredSourceId = "local";
+double configuredRadarRangeKm = 2.5;
+bool configuredRadarAlignWithGravity = false;
 double remoteSettingBroadcastTimer;
 const double REMOTE_SETTING_BROADCAST_SECONDS = 1.0;
 
@@ -594,6 +598,8 @@ void UpdateRadarLcd()
     runtimeAgs.Markers = new List<VetileRadarDisplay.MarkerInfo>();
     runtimeAgs.BoostMode = false;
     runtimeAgs.ProjectionRotationDegrees = targetSourceMode == TargetSourceMode.Remote ? 180f : 270f;
+    runtimeAgs.RadarRangeMeters = Math.Max(100, configuredRadarRangeKm * 1000.0);
+    runtimeAgs.InvertVerticalAxis = targetSourceMode == TargetSourceMode.Remote;
 
     // Radar origin/frame should be the currently selected source.
     if (activeTargetPacket.SourceForward.LengthSquared() > 0.001)
@@ -601,6 +607,22 @@ void UpdateRadarLcd()
     if (activeTargetPacket.SourceUp.LengthSquared() > 0.001)
         runtimeAgs.ReferenceUpwards = Vector3D.Normalize(activeTargetPacket.SourceUp);
     runtimeAgs.ReferenceLocation = activeTargetPacket.SourcePosition;
+
+    // Optional gravity alignment (uses this grid/controller gravity frame instead of source frame).
+    if (configuredRadarAlignWithGravity && navController != null)
+    {
+        Vector3D gravity = navController.GetNaturalGravity();
+        if (gravity.LengthSquared() > 0.0001)
+        {
+            Vector3D upFromGravity = -Vector3D.Normalize(gravity);
+            Vector3D forwardProjected = Vector3D.Reject(navController.WorldMatrix.Forward, upFromGravity);
+            if (forwardProjected.LengthSquared() < 0.0001)
+                forwardProjected = Vector3D.Reject(navController.WorldMatrix.Right, upFromGravity);
+            if (forwardProjected.LengthSquared() > 0.0001)
+                runtimeAgs.ReferenceForwards = Vector3D.Normalize(forwardProjected);
+            runtimeAgs.ReferenceUpwards = upFromGravity;
+        }
+    }
 
     // Rover marker (green), no tag text requested.
     VetileRadarDisplay.MarkerInfo roverMarker = new VetileRadarDisplay.MarkerInfo();
@@ -1363,6 +1385,14 @@ TargetPacket BuildNoTargetPacket()
 void LoadConfig()
 {
     configuredSourceId = GetCustomDataValue(SOURCE_ID_KEY, "local");
+
+    double parsedRangeKm;
+    if (!double.TryParse(GetCustomDataValue(RADAR_RANGE_KM_KEY, "2.5"), out parsedRangeKm))
+        parsedRangeKm = 2.5;
+    configuredRadarRangeKm = Math.Max(0.1, parsedRangeKm);
+
+    string radarFrameRaw = GetCustomDataValue(RADAR_FRAME_KEY, "source");
+    configuredRadarAlignWithGravity = radarFrameRaw.Equals("gravity", StringComparison.OrdinalIgnoreCase);
 }
 
 string GetLocalSourceId()
@@ -1622,6 +1652,9 @@ public class VetileRadarDisplay
     const string Circle = "Circle";
     const float DefaultRadarRotationDegrees = 270f; //orientation correction
     float CurrentProjectionRotationDegrees = DefaultRadarRotationDegrees;
+    const double DefaultRadarRangeMeters = 2500.0;
+    double CurrentRadarRangeMeters = DefaultRadarRangeMeters;
+    bool CurrentInvertVerticalAxis = false;
 
     public VetileRadarDisplay(IMyTextSurface textSurface)
     {
@@ -1711,9 +1744,17 @@ public class VetileRadarDisplay
         frame.Add(new MySprite(SpriteType.TEXTURE, "SquareSimple", new Vector2(-218f, 198f) * scale + centerPos, new Vector2(17f, 37f) * scale, Color.White, null, TextAlignment.CENTER, 0f));
         frame.Add(new MySprite(SpriteType.TEXTURE, "SquareSimple", new Vector2(-218f, 197f) * scale + centerPos, new Vector2(5f, 31f) * scale, Color.Black, null, TextAlignment.CENTER, 0f));
         frame.Add(new MySprite(SpriteType.TEXTURE, "SquareHollow", new Vector2(174f, 200f) * scale + centerPos, new Vector2(130f, 88f) * scale, Color.White, null, TextAlignment.CENTER, 0f));
-        frame.Add(new MySprite(SpriteType.TEXT, "1.5Km", new Vector2(-17f, 104f) * scale + centerPos, null, Color.White, "Debug", TextAlignment.LEFT, 0.5f * scale));
-        frame.Add(new MySprite(SpriteType.TEXT, "2.5Km", new Vector2(-21f, 186f) * scale + centerPos, null, Color.White, "Debug", TextAlignment.LEFT, 0.5f * scale));
         frame.Add(new MySprite(SpriteType.TEXT, "VET", new Vector2(-153f, 216f) * scale + centerPos, null, Color.White, "Debug", TextAlignment.CENTER, 0.6f * scale));
+        return frame;
+    }
+
+    public List<MySprite> DrawRangeLabels(Vector2 centerPos, double radarRangeMeters, float scale = 1 / 512f)
+    {
+        List<MySprite> frame = new List<MySprite>();
+        double outerKm = Math.Max(0.1, radarRangeMeters) / 1000.0;
+        double innerKm = outerKm * 0.6;
+        frame.Add(new MySprite(SpriteType.TEXT, innerKm.ToString("0.#") + "Km", new Vector2(-17f, 104f) * scale + centerPos, null, Color.White, "Debug", TextAlignment.LEFT, 0.5f * scale));
+        frame.Add(new MySprite(SpriteType.TEXT, outerKm.ToString("0.#") + "Km", new Vector2(-21f, 186f) * scale + centerPos, null, Color.White, "Debug", TextAlignment.LEFT, 0.5f * scale));
         return frame;
     }
 
@@ -1737,18 +1778,19 @@ public class VetileRadarDisplay
 
     public void ProjectToPlane(MatrixD worldToLocal, Vector3D location, Vector3D velocity, out Vector2 locationScreenspace, out Vector2 velocityIndicator)
     {
-        const float pixelsPerMeter = 0.5f * 0.16f;
-        const float screenUnitsPerMeter = pixelsPerMeter / 512.0f;
+        float screenUnitsPerMeter = (200f / 512f) / (float)Math.Max(100.0, CurrentRadarRangeMeters);
         Vector2 radarCenter = new Vector2(0.5f, 0.5f) + new Vector2(0, -16) / 512.0f;
         Vector3D localPos = Vector3D.Transform(location, worldToLocal);
         Vector2 localFlat = new Vector2((float)localPos.X, (float)localPos.Z);
         localFlat = RotateVectorDegrees(localFlat, CurrentProjectionRotationDegrees);
+        if (CurrentInvertVerticalAxis) localFlat.Y = -localFlat.Y;
         locationScreenspace = radarCenter + localFlat * screenUnitsPerMeter;
 
         Vector3D localVelocity = Vector3D.TransformNormal(velocity, worldToLocal);
         if (localVelocity.LengthSquared() > 0) localVelocity = Vector3D.Normalize(localVelocity);
         Vector2 velFlat = new Vector2((float)localVelocity.X, (float)localVelocity.Z);
         velFlat = RotateVectorDegrees(velFlat, CurrentProjectionRotationDegrees);
+        if (CurrentInvertVerticalAxis) velFlat.Y = -velFlat.Y;
         velocityIndicator = locationScreenspace + velFlat * 0.05f;
     }
 
@@ -1792,6 +1834,8 @@ public class VetileRadarDisplay
         public bool TargetLock;
         public bool BoostMode;
         public float ProjectionRotationDegrees;
+        public double RadarRangeMeters;
+        public bool InvertVerticalAxis;
     }
 
     public struct MarkerInfo
@@ -1808,10 +1852,13 @@ public class VetileRadarDisplay
             CurrentProjectionRotationDegrees = Math.Abs(args.ProjectionRotationDegrees) > 0.001f
                 ? args.ProjectionRotationDegrees
                 : DefaultRadarRotationDegrees;
+            CurrentRadarRangeMeters = args.RadarRangeMeters > 0 ? args.RadarRangeMeters : DefaultRadarRangeMeters;
+            CurrentInvertVerticalAxis = args.InvertVerticalAxis;
 
             List<MySprite> renderableSprites = new List<MySprite>();
             renderableSprites.AddRange(DrawRuntimeUI(new Vector2(0.5f, 0.5f), sweepAngle));
             renderableSprites.AddRange(DrawFixedUI(new Vector2(0.5f, 0.5f)));
+            renderableSprites.AddRange(DrawRangeLabels(new Vector2(0.5f, 0.5f), CurrentRadarRangeMeters));
 
             MatrixD viewMatrix = MatrixD.CreateWorld(args.ReferenceLocation, args.ReferenceForwards, args.ReferenceUpwards);
             MatrixD viewInv = MatrixD.Invert(viewMatrix);
