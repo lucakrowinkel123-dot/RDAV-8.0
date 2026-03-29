@@ -588,6 +588,9 @@ string GetCachedTagRuntimeDisplay(string tag)
     if ((elapsedSeconds - lastTagRuntimeRefreshAt) > TAG_RUNTIME_REFRESH_SECONDS)
         RefreshTagRuntimeCache();
 
+    double bestReceivedAt = double.MinValue;
+    double bestRuntimeMs = 0;
+    bool hasBest = false;
     foreach (var kv in rdavMissileFeeds)
     {
         var feed = kv.Value;
@@ -595,15 +598,55 @@ string GetCachedTagRuntimeDisplay(string tag)
             continue;
         if (!feed.HasRuntime)
             continue;
-        if (feed.SourceName == null || feed.SourceName.IndexOf(tag, StringComparison.OrdinalIgnoreCase) < 0)
+        if (!SourceNameMatchesTag(feed.SourceName, tag))
             continue;
-        return feed.LastRuntimeMs.ToString("0.000") + " ms";
+
+        if (!hasBest || feed.LastReceivedAt > bestReceivedAt)
+        {
+            hasBest = true;
+            bestReceivedAt = feed.LastReceivedAt;
+            bestRuntimeMs = feed.LastRuntimeMs;
+        }
     }
+    if (hasBest)
+        return bestRuntimeMs.ToString("0.000") + " ms";
 
     string value;
     if (cachedTagRuntimeDisplay.TryGetValue(tag, out value))
         return value;
     return "-";
+}
+
+bool SourceNameMatchesTag(string sourceName, string tag)
+{
+    if (string.IsNullOrWhiteSpace(sourceName) || string.IsNullOrWhiteSpace(tag))
+        return false;
+
+    if (sourceName.Equals(tag, StringComparison.OrdinalIgnoreCase))
+        return true;
+
+    int tokenStart = -1;
+    for (int i = 0; i <= sourceName.Length; i++)
+    {
+        bool isTokenChar = i < sourceName.Length && (char.IsLetterOrDigit(sourceName[i]) || sourceName[i] == '_');
+        if (isTokenChar)
+        {
+            if (tokenStart < 0)
+                tokenStart = i;
+            continue;
+        }
+
+        if (tokenStart >= 0)
+        {
+            int tokenLen = i - tokenStart;
+            if (tokenLen == tag.Length &&
+                string.Compare(sourceName, tokenStart, tag, 0, tag.Length, StringComparison.OrdinalIgnoreCase) == 0)
+                return true;
+            tokenStart = -1;
+        }
+    }
+
+    return false;
 }
 
 void RefreshTagRuntimeCache()
