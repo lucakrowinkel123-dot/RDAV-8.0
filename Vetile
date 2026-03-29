@@ -37,6 +37,7 @@ const double RDAV_MISSILE_STALE_SECONDS = 2.0;
 const int MAX_SCOUT_MESSAGES_PER_UPDATE = 3;
 const int MAX_RDAV_MESSAGES_PER_UPDATE = 3;
 const int TARGET_FORWARD_INTERVAL_UPDATES = 2;
+const double LOCAL_FLIGHT_REFRESH_SECONDS = 2.0;
 const string RDAV_STATUS_NONE = "NO_TARGET";
 const string SOURCE_ID_KEY = "SourceId";
 const string RADAR_RANGE_KM_KEY = "RadarRangeKm";
@@ -167,6 +168,8 @@ double configuredRadarRangeKm = 2.5;
 bool configuredRadarAlignWithGravity = false;
 double remoteSettingBroadcastTimer;
 const double REMOTE_SETTING_BROADCAST_SECONDS = 1.0;
+IMyFlightMovementBlock cachedLocalFlight;
+double lastLocalFlightRefreshAt = -9999;
 
 public Program()
 {
@@ -1525,11 +1528,7 @@ bool TryGetLocalPacket(out TargetPacket packet)
 {
     packet = BuildNoTargetPacket();
 
-    IMyFlightMovementBlock localFlight = null;
-    var flights = new List<IMyFlightMovementBlock>();
-    GridTerminalSystem.GetBlocksOfType(flights, b => NameHasTag(b.CustomName, SUMMARY_LCD_TAG));
-    if (flights.Count > 0)
-        localFlight = flights[0];
+    IMyFlightMovementBlock localFlight = GetLocalFlightBlock();
 
     if (localFlight == null || localFlight.CurrentWaypoint == null)
         return false;
@@ -1548,6 +1547,19 @@ bool TryGetLocalPacket(out TargetPacket packet)
     packet.SourceName = GetLocalSourceId();
     packet.Timestamp = elapsedSeconds;
     return true;
+}
+
+IMyFlightMovementBlock GetLocalFlightBlock()
+{
+    bool needsRefresh = cachedLocalFlight == null || cachedLocalFlight.Closed;
+    if (!needsRefresh && (elapsedSeconds - lastLocalFlightRefreshAt) < LOCAL_FLIGHT_REFRESH_SECONDS)
+        return cachedLocalFlight;
+
+    lastLocalFlightRefreshAt = elapsedSeconds;
+    var flights = new List<IMyFlightMovementBlock>();
+    GridTerminalSystem.GetBlocksOfType(flights, b => NameHasTag(b.CustomName, SUMMARY_LCD_TAG));
+    cachedLocalFlight = flights.Count > 0 ? flights[0] : null;
+    return cachedLocalFlight;
 }
 
 bool TryGetRemotePacket(out TargetPacket packet)
