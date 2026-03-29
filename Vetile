@@ -25,6 +25,7 @@ const double SAFE_DETONATION_DISTANCE_METERS = 250.0;
 const double WARHEAD_RANGE_CHECK_SECONDS = 10.0;
 const double WARHEAD_MAX_DISTANCE_METERS = 5000.0;
 const double SUMMARY_LCD_UPDATE_SECONDS = 0.5;
+const double ECHO_SUMMARY_UPDATE_SECONDS = 1.0;
 const string ALERT_SOUND_NAME = "Alert 2";
 const string TARGET_PACKET_HEADER = "VTARGET";
 const string TARGET_PACKET_VERSION = "1";
@@ -33,6 +34,9 @@ const string IGC_SCOUT_CONTROL_CHANNEL = "VETILE_SCOUT_CONTROL";
 const string IGC_RDAV_MISSILE_CHANNEL = "VETILE_RDAV_MISSILES";
 const double REMOTE_TARGET_STALE_SECONDS = 2.0;
 const double RDAV_MISSILE_STALE_SECONDS = 2.0;
+const int MAX_SCOUT_MESSAGES_PER_UPDATE = 3;
+const int MAX_RDAV_MESSAGES_PER_UPDATE = 3;
+const int TARGET_FORWARD_INTERVAL_UPDATES = 2;
 const string RDAV_STATUS_NONE = "NO_TARGET";
 const string SOURCE_ID_KEY = "SourceId";
 const string RADAR_RANGE_KM_KEY = "RadarRangeKm";
@@ -143,6 +147,7 @@ double fireAllElapsed;
 double warheadRangeCheckTimer;
 int warheadRangeCheckTagIndex;
 double summaryLcdTimer;
+double echoSummaryTimer;
 IMyBroadcastListener scoutListener;
 IMyBroadcastListener rdavMissileListener;
 TargetSourceMode targetSourceMode = TargetSourceMode.Local;
@@ -155,6 +160,8 @@ const double TAG_RUNTIME_REFRESH_SECONDS = 2.0;
 int selectedRemoteIndex;
 TargetPacket activeTargetPacket;
 double activeTargetDistanceMeters = -1;
+int targetForwardUpdateCounter;
+int targetForwardTagIndex;
 string configuredSourceId = "local";
 double configuredRadarRangeKm = 2.5;
 bool configuredRadarAlignWithGravity = false;
@@ -265,6 +272,18 @@ public void Main(string argument, UpdateType updateSource)
         }
     }
 
+    bool isPureUpdate1 = string.IsNullOrWhiteSpace(argument)
+        && (updateSource & UpdateType.Update1) != 0
+        && (updateSource & UpdateType.Update10) == 0
+        && (updateSource & UpdateType.Trigger) == 0;
+    if (isPureUpdate1)
+    {
+        // Fast-path while FireAll is active: avoid running full logic at Update1 cadence.
+        if (fireAllSequenceActive)
+            ProcessFireAllSequence();
+        return;
+    }
+
     PollScoutMessages();
     PollRdavMissileMessages();
     ResolveAndForwardTarget();
@@ -290,7 +309,12 @@ public void Main(string argument, UpdateType updateSource)
         AutoDetonateOutOfRangeWarheadsNextTag();
     }
 
-    EchoSummary();
+    echoSummaryTimer += Runtime.TimeSinceLastRun.TotalSeconds;
+    if (echoSummaryTimer >= ECHO_SUMMARY_UPDATE_SECONDS)
+    {
+        echoSummaryTimer = 0;
+        EchoSummary();
+    }
 
     summaryLcdTimer += Runtime.TimeSinceLastRun.TotalSeconds;
     if (summaryLcdTimer >= SUMMARY_LCD_UPDATE_SECONDS)
@@ -1325,9 +1349,14 @@ void PollScoutMessages()
     if (scoutListener == null)
         return;
 
+    int processed = 0;
     while (scoutListener.HasPendingMessage)
     {
+        if (processed >= MAX_SCOUT_MESSAGES_PER_UPDATE)
+            break;
+
         var message = scoutListener.AcceptMessage();
+        processed++;
         string payload = message.Data as string;
         if (string.IsNullOrWhiteSpace(payload))
             continue;
@@ -1359,9 +1388,14 @@ void PollRdavMissileMessages()
     if (rdavMissileListener == null)
         return;
 
+    int processed = 0;
     while (rdavMissileListener.HasPendingMessage)
     {
+        if (processed >= MAX_RDAV_MESSAGES_PER_UPDATE)
+            break;
+
         var message = rdavMissileListener.AcceptMessage();
+        processed++;
         string payload = message.Data as string;
         if (string.IsNullOrWhiteSpace(payload))
             continue;
@@ -1465,13 +1499,26 @@ void ResolveAndForwardTarget()
     activeTargetPacket = packet;
     activeTargetDistanceMeters = packet.HasTarget ? Vector3D.Distance(Me.GetPosition(), packet.TargetPosition) : -1;
 
+    targetForwardUpdateCounter++;
+    if (targetForwardUpdateCounter < TARGET_FORWARD_INTERVAL_UPDATES)
+        return;
+    targetForwardUpdateCounter = 0;
+
     string encoded = EncodeTargetPacket(packet);
-    for (int i = 0; i < TAGS.Length; i++)
-    {
-        var ch = channels[TAGS[i]];
-        if (ch.FireTargetPb != null)
-            ch.FireTargetPb.TryRun(encoded);
-    }
+    if (TAGS.Length == 0)
+        return;
+
+    if (targetForwardTagIndex >= TAGS.Length)
+        targetForwardTagIndex = 0;
+
+    string tag = TAGS[targetForwardTagIndex];
+    targetForwardTagIndex++;
+
+    TagChannel ch;
+    if (!channels.TryGetValue(tag, out ch))
+        return;
+    if (ch.FireTargetPb != null)
+        ch.FireTargetPb.TryRun(encoded);
 }
 
 bool TryGetLocalPacket(out TargetPacket packet)
