@@ -591,6 +591,9 @@ string GetCachedTagRuntimeDisplay(string tag)
     double bestReceivedAt = double.MinValue;
     double bestRuntimeMs = 0;
     bool hasBest = false;
+    double newestAnyReceivedAt = double.MinValue;
+    double newestAnyRuntimeMs = 0;
+    int freshRuntimeFeedCount = 0;
     foreach (var kv in rdavMissileFeeds)
     {
         var feed = kv.Value;
@@ -598,6 +601,14 @@ string GetCachedTagRuntimeDisplay(string tag)
             continue;
         if (!feed.HasRuntime)
             continue;
+
+        freshRuntimeFeedCount++;
+        if (feed.LastReceivedAt > newestAnyReceivedAt)
+        {
+            newestAnyReceivedAt = feed.LastReceivedAt;
+            newestAnyRuntimeMs = feed.LastRuntimeMs;
+        }
+
         if (!SourceNameMatchesTag(feed.SourceName, tag))
             continue;
 
@@ -610,6 +621,11 @@ string GetCachedTagRuntimeDisplay(string tag)
     }
     if (hasBest)
         return bestRuntimeMs.ToString("0.000") + " ms";
+
+    // If exactly one fresh RDAV runtime feed exists, show it as a fallback.
+    // This avoids persistent "-" when SourceName doesn't encode tag text.
+    if (freshRuntimeFeedCount == 1)
+        return newestAnyRuntimeMs.ToString("0.000") + " ms";
 
     string value;
     if (cachedTagRuntimeDisplay.TryGetValue(tag, out value))
