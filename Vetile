@@ -91,7 +91,6 @@ class RemoteSourceState
 struct MissilePoint
 {
     public Vector3D Position;
-    public Vector3D Velocity;
 }
 
 class RdavMissileFeed
@@ -841,7 +840,6 @@ void AddClusteredMissilesToDisplay(List<VetileRadarDisplay.TargetInfo> output, L
             continue;
 
         Vector3D posSum = missiles[i].Position;
-        Vector3D velSum = missiles[i].Velocity;
         int count = 1;
         used[i] = true;
 
@@ -854,14 +852,13 @@ void AddClusteredMissilesToDisplay(List<VetileRadarDisplay.TargetInfo> output, L
 
             used[j] = true;
             posSum += missiles[j].Position;
-            velSum += missiles[j].Velocity;
             count++;
         }
 
         VetileRadarDisplay.TargetInfo missileInfo = new VetileRadarDisplay.TargetInfo();
         missileInfo.RenderColour = Color.RoyalBlue;
         missileInfo.Location = posSum / count;
-        missileInfo.Velocity = velSum / count;
+        missileInfo.Velocity = Vector3D.Zero;
         missileInfo.MarkerSize = 0.0125f; // half of default 0.025
         output.Add(missileInfo);
     }
@@ -1425,23 +1422,28 @@ bool TryParseRdavMissilePacket(string payload, out string sourceName, out List<M
         index = 5;
     }
 
-    int expected = index + (count * 6);
+    int valuesPerMissile = version >= 3 ? 3 : 6; // v3+: position only, v1/v2: position + velocity
+    int expected = index + (count * valuesPerMissile);
     if (parts.Length < expected)
         return false;
 
     for (int i = 0; i < count; i++)
     {
-        double px, py, pz, vx, vy, vz;
+        double px, py, pz;
         if (!double.TryParse(parts[index++], out px)) return false;
         if (!double.TryParse(parts[index++], out py)) return false;
         if (!double.TryParse(parts[index++], out pz)) return false;
-        if (!double.TryParse(parts[index++], out vx)) return false;
-        if (!double.TryParse(parts[index++], out vy)) return false;
-        if (!double.TryParse(parts[index++], out vz)) return false;
+        if (valuesPerMissile == 6)
+        {
+            // Legacy payloads include velocity triples; consume and ignore them.
+            double ignored;
+            if (!double.TryParse(parts[index++], out ignored)) return false;
+            if (!double.TryParse(parts[index++], out ignored)) return false;
+            if (!double.TryParse(parts[index++], out ignored)) return false;
+        }
 
         MissilePoint missile = new MissilePoint();
         missile.Position = new Vector3D(px, py, pz);
-        missile.Velocity = new Vector3D(vx, vy, vz);
         missiles.Add(missile);
     }
 

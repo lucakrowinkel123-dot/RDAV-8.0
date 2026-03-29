@@ -1306,7 +1306,7 @@
       { return; }
 
       StringBuilder packetBuilder = new StringBuilder();
-      packetBuilder.Append(MissileTelemetryPacketHeader).Append("|2|");
+      packetBuilder.Append(MissileTelemetryPacketHeader).Append("|3|");
       packetBuilder.Append(Me != null ? Me.CustomName : "RDAV").Append("|");
 
       int count = 0;
@@ -1331,9 +1331,7 @@
           { continue; }
 
           Vector3D pos = missile.WorldLocation;
-          Vector3D vel = missile.WorldVelocity * 30;
           packetBuilder.Append("|").Append(pos.X.ToString("0.#")).Append("|").Append(pos.Y.ToString("0.#")).Append("|").Append(pos.Z.ToString("0.#"));
-          packetBuilder.Append("|").Append(vel.X.ToString("0.#")).Append("|").Append(vel.Y.ToString("0.#")).Append("|").Append(vel.Z.ToString("0.#"));
           written++;
       }
 
